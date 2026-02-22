@@ -4,12 +4,12 @@ from dotenv import load_dotenv
 from google.adk.agents.llm_agent import Agent
 from google_authenticator import authenticate_google_calendar
 from google.adk.models import LiteLlm
-from tools import (
+from .tools import (
     get_current_datetime,
     get_schedule_for_date,
     create_calendar_event,
-    delete_calendar_event_for_date,
-    update_calendar_event_for_date,
+    delete_calendar_event,
+    update_calendar_event,
     get_free_slots_for_date,
 )
 
@@ -37,8 +37,9 @@ service = authenticate_google_calendar()
 #     print(result)
 
 model = LiteLlm(
-    model="groq/qwen/qwen3-32b",  # use "groq/<groq-model-name>",
+    model="groq/openai/gpt-oss-120b",  # use "groq/<groq-model-name>",
 )
+model = "gemini-3-flash-preview"
 
 root_agent = Agent(
     model=model,
@@ -59,8 +60,8 @@ root_agent = Agent(
         get_current_datetime,
         get_schedule_for_date,
         create_calendar_event,
-        delete_calendar_event_for_date,
-        update_calendar_event_for_date,
+        delete_calendar_event,
+        update_calendar_event,
         get_free_slots_for_date,
     ],
 )
