@@ -1,57 +1,97 @@
-import datetime
-import os.path
+"""Start the calendar agent from the project root."""
+import asyncio
+import warnings
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+import speech_recognition as sr
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types  # For creating message Content/Parts
 
-# If modifying these scopes, delete the file token.json.
-SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+from src.agents.calenderAgent.agent import root_agent
 
-def main():
-    creds = None
-    # The file token.json stores the user's access and refresh tokens.
-    # It is created automatically when the authorization flow completes for the first time.
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+warnings.filterwarnings("ignore", category=UserWarning)
 
-    try:
-        service = build('calendar', 'v3', credentials=creds)
+APP_NAME = "weather_tutorial_app"
+USER_ID = "user_1"
+SESSION_ID = "session_001"  # Using a fixed ID for simplicity
 
-        # Call the Calendar API
-        now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
-        print('Getting the upcoming 10 events')
-        
-        events_result = service.events().list(calendarId='primary', timeMin=now,
-                                              maxResults=10, singleEvents=True,
-                                              orderBy='startTime').execute()
-        events = events_result.get('items', [])
 
-        if not events:
-            print('No upcoming events found.')
-            return
+async def call_agent_async(query: str, runner, user_id, session_id):
+    """Sends a query to the agent and prints the final response."""
+    print(f"\n>>> User Query: {query}")
 
-        # Prints the start and name of the next 10 events
-        for event in events:
-            start = event['start'].get('dateTime', event['start'].get('date'))
-            print(f"{start} - {event.get('summary')}")
+    content = types.Content(role="user", parts=[types.Part(text=query)])
+    final_response_text = "Agent did not produce a final response."
 
-    except HttpError as error:
-        print(f'An error occurred: {error}')
+    async for event in runner.run_async(
+        user_id=user_id,
+        session_id=session_id,
+        new_message=content,
+    ):
+        if event.is_final_response():
+            if event.content and event.content.parts:
+                final_response_text = event.content.parts[0].text
+            elif event.actions and event.actions.escalate:
+                final_response_text = (
+                    f"Agent escalated: {event.error_message or 'No specific message.'}"
+                )
+            break
 
-if __name__ == '__main__':
-    main()
+    print(f"<<< Agent Response: {final_response_text}")
+
+
+async def main():
+    print("Starting calendar agent (root_agent) from main.py...")
+
+    # Create session service
+    session_service = InMemorySessionService()
+
+    # Create session
+    await session_service.create_session(
+        app_name=APP_NAME,
+        user_id=USER_ID,
+        session_id=SESSION_ID,
+    )
+
+    print(
+        f"Session created: App='{APP_NAME}', User='{USER_ID}', Session='{SESSION_ID}'"
+    )
+
+    # Create runner
+    runner = Runner(
+        agent=root_agent,
+        app_name=APP_NAME,
+        session_service=session_service,
+    )
+
+    async def listen_and_send():
+        recognizer = sr.Recognizer()
+
+        while True:
+            with sr.Microphone() as source:
+                print("Speak now... (say 'end' to stop)")
+                recognizer.adjust_for_ambient_noise(source)
+                audio = recognizer.listen(source)
+
+            try:
+                text = recognizer.recognize_google(audio)
+                print("You said:", text)
+
+                if text.strip().lower() == "end":
+                    print("Ending voice loop.")
+                    break
+
+                await call_agent_async(
+                    text,
+                    runner=runner,
+                    user_id=USER_ID,
+                    session_id=SESSION_ID,
+                )
+            except Exception as e:
+                print("Could not understand audio:", e)
+
+    await listen_and_send()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
