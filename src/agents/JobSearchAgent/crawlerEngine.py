@@ -1,48 +1,28 @@
-import requests
-import time
-import json
+import argparse
 import csv
-import os
+import json
+import re
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
 
-# ==========================
-# CONFIG
-# ==========================
-BASE_URL = "https://jpmc.fa.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+import requests
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs",
-    "Origin": "https://jpmc.fa.oraclecloud.com",
-    "Connection": "keep-alive",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-}
-
-SITE_NUMBER       = "CX_1001"
-INDIA_LOCATION_ID = "300000000289360"
-AI_CATEGORY_ID    = "300000086152753"   # "AI" category facet — from your network tab
-PAGE_SIZE         = 25
-
-# Facets copied verbatim from your request URL
-FACETS_LIST = "LOCATIONS;WORK_LOCATIONS;WORKPLACE_TYPES;TITLES;CATEGORIES;ORGANIZATIONS;POSTING_DATES;FLEX_FIELDS"
-
-# Expand fields copied verbatim from your request URL
-EXPAND_FIELDS = (
+DEFAULT_FACETS_LIST = (
+    "LOCATIONS;WORK_LOCATIONS;WORKPLACE_TYPES;TITLES;CATEGORIES;"
+    "ORGANIZATIONS;POSTING_DATES;FLEX_FIELDS"
+)
+DEFAULT_EXPAND_FIELDS = (
     "requisitionList.workLocation,"
     "requisitionList.otherWorkLocations,"
     "requisitionList.secondaryLocations,"
     "flexFieldsFacet.values,"
     "requisitionList.requisitionFlexFields"
 )
-
-# Each keyword is searched separately to maximise result coverage
-# (Oracle HCM caps results per search, so multi-keyword sweeps help)
-AI_KEYWORDS = [
+DEFAULT_KEYWORDS = [
     "AI",
     "machine learning",
     "LLM",
@@ -53,221 +33,387 @@ AI_KEYWORDS = [
     "MLOps",
 ]
 
-OUTPUT_JSON = "dataset/jpmc_ai_jobs_india.json"
-OUTPUT_CSV  = "dataset/jpmc_ai_jobs_india.csv"
+COMPANY_KEY_ALIASES = {
+    "jpmorgan": "jpmorgan",
+    "jpm": "jpmorgan",
+    "jpmc": "jpmorgan",
+    "oracle": "oracle",
+}
 
-# ==========================
-# HELPERS
-# ==========================
 
-def build_finder(keyword: str, offset: int) -> str:
-    """
-    Reconstruct the finder string exactly as seen in the browser network tab.
-    Note: requests will percent-encode this value as a whole; the semicolons
-    inside are the Oracle HCM parameter delimiter and must NOT be pre-encoded.
-    """
-    return (
-        f"findReqs;"
-        f"siteNumber={SITE_NUMBER},"
-        f'facetsList={FACETS_LIST},'
-        f"limit={PAGE_SIZE},"
-        f"offset={offset},"
-        f'keyword="{keyword}",'
-        f"lastSelectedFacet=CATEGORIES,"
-        f"locationId={INDIA_LOCATION_ID},"
-        f"selectedCategoriesFacet={AI_CATEGORY_ID},"
-        f"sortBy=RELEVANCY"
-    )
+@dataclass
+class OracleHCMCrawlerConfig:
+    company_name: str
+    endpoint: str
+    keywords: list[str]
+    site_number: str | None = None
+    location_id: str | None = None
+    category_id: str | None = None
+    page_size: int = 25
+    facets_list: str = DEFAULT_FACETS_LIST
+    expand_fields: str = DEFAULT_EXPAND_FIELDS
+    sort_by: str = "RELEVANCY"
+    request_timeout_seconds: int = 20
+    retry_after_seconds: int = 15
+    inter_page_sleep_seconds: float = 0.75
+    inter_keyword_sleep_seconds: float = 1.5
+    output_dir: str = "dataset"
 
-def build_apply_url(job_id) -> str:
-    return (
-        f"https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en"
-        f"/sites/{SITE_NUMBER}/job/{job_id}"
-    )
 
-def extract_location_name(loc) -> str:
-    """Safely extract Name whether the API returns a dict or a list of dicts."""
-    if isinstance(loc, dict):
-        return loc.get("Name", "")
-    if isinstance(loc, list) and loc:
-        first = loc[0]
-        return first.get("Name", "") if isinstance(first, dict) else str(first)
+def slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+def canonical_company_key(company_name: str) -> str:
+    name = company_name.lower()
+    for alias, canonical in COMPANY_KEY_ALIASES.items():
+        if alias in name:
+            return canonical
+    return slugify(company_name)
+
+
+def get_origin(url: str) -> str:
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def build_headers(config: OracleHCMCrawlerConfig) -> dict[str, str]:
+    origin = get_origin(config.endpoint)
+    referer_site = config.site_number or "CX_1001"
+    referer = f"{origin}/hcmUI/CandidateExperience/en/sites/{referer_site}/jobs"
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": referer,
+        "Origin": origin,
+        "Connection": "keep-alive",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+    }
+
+
+def build_finder(config: OracleHCMCrawlerConfig, keyword: str, offset: int) -> str:
+    parts = [
+        f"siteNumber={config.site_number or ''}",
+        f"facetsList={config.facets_list}",
+        f"limit={config.page_size}",
+        f"offset={offset}",
+        f'keyword="{keyword}"',
+        "lastSelectedFacet=CATEGORIES",
+        f"sortBy={config.sort_by}",
+    ]
+
+    if config.location_id:
+        parts.append(f"locationId={config.location_id}")
+    if config.category_id:
+        parts.append(f"selectedCategoriesFacet={config.category_id}")
+
+    return "findReqs;" + ",".join(parts)
+
+
+def build_apply_url(config: OracleHCMCrawlerConfig, job_id: Any) -> str:
+    origin = get_origin(config.endpoint)
+    if config.site_number:
+        return (
+            f"{origin}/hcmUI/CandidateExperience/en/sites/"
+            f"{config.site_number}/job/{job_id}"
+        )
     return ""
 
-def extract_location_list(locs) -> list:
-    """Normalise otherWorkLocations — could be a list of dicts or a plain list."""
+
+def extract_location_name(loc: Any) -> str:
+    if isinstance(loc, dict):
+        return str(loc.get("Name", ""))
+    if isinstance(loc, list) and loc:
+        first = loc[0]
+        return str(first.get("Name", "")) if isinstance(first, dict) else str(first)
+    return ""
+
+
+def extract_location_list(locs: Any) -> list[str]:
     if not locs:
         return []
     if isinstance(locs, list):
-        return [extract_location_name(l) for l in locs]
+        return [extract_location_name(loc) for loc in locs]
     return [extract_location_name(locs)]
 
-def now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
-def format_job(job: dict) -> dict:
-    work_location = job.get("workLocation")
-    other_locs    = job.get("otherWorkLocations")
-    flex_fields   = job.get("requisitionFlexFields") or []
+def format_job(config: OracleHCMCrawlerConfig, job: dict[str, Any]) -> dict[str, Any]:
+    flex_fields = job.get("requisitionFlexFields") or []
     flex = {
-        f.get("FlexFieldNameCode"): f.get("FlexFieldValueCode")
-        for f in flex_fields if isinstance(f, dict) and f.get("FlexFieldNameCode")
+        field.get("FlexFieldNameCode"): field.get("FlexFieldValueCode")
+        for field in flex_fields
+        if isinstance(field, dict) and field.get("FlexFieldNameCode")
     }
     return {
-        "id":               job.get("Id"),
-        "title":            job.get("Title", ""),
+        "id": job.get("Id"),
+        "title": job.get("Title", ""),
         "primary_location": job.get("PrimaryLocation", ""),
-        "work_location":    extract_location_name(work_location),
-        "other_locations":  extract_location_list(other_locs),
-        "workplace_type":   job.get("WorkplaceType", ""),
-        "category":         job.get("CategoryName", ""),
-        "organization":     job.get("OrganizationName", ""),
-        "posted":           job.get("PostedDate", ""),
-        "flex_fields":      flex,
-        "apply_url":        build_apply_url(job.get("Id")),
-        "scraped_at":       datetime.now(timezone.utc).isoformat(),
+        "work_location": extract_location_name(job.get("workLocation")),
+        "other_locations": extract_location_list(job.get("otherWorkLocations")),
+        "workplace_type": job.get("WorkplaceType", ""),
+        "category": job.get("CategoryName", ""),
+        "organization": job.get("OrganizationName", ""),
+        "posted": job.get("PostedDate", ""),
+        "flex_fields": flex,
+        "apply_url": build_apply_url(config, job.get("Id")),
+        "company": config.company_name,
+        "source_endpoint": config.endpoint,
+        "scraped_at": datetime.now(timezone.utc).isoformat(),
     }
 
-# ==========================
-# PERSISTENCE
-# ==========================
 
-def load_existing() -> dict:
-    if not os.path.exists(OUTPUT_JSON):
+def get_output_paths(config: OracleHCMCrawlerConfig) -> tuple[Path, Path]:
+    output_dir = Path(config.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base = canonical_company_key(config.company_name)
+    json_path = output_dir / f"{base}_jobs.json"
+    csv_path = output_dir / f"{base}_jobs.csv"
+    return json_path, csv_path
+
+
+def load_existing(json_path: Path) -> dict[str, dict[str, Any]]:
+    if not json_path.exists():
         return {}
-    with open(OUTPUT_JSON, "r") as f:
-        jobs = json.load(f)
-    print(f"Resumed: loaded {len(jobs)} previously saved jobs.")
-    return {j["id"]: j for j in jobs}
+    with json_path.open("r", encoding="utf-8") as file:
+        jobs = json.load(file)
+    return {str(job["id"]): job for job in jobs if isinstance(job, dict) and "id" in job}
 
-def save_json(jobs_by_id: dict):
-    with open(OUTPUT_JSON, "w") as f:
-        json.dump(list(jobs_by_id.values()), f, indent=2)
 
-def save_csv(jobs_by_id: dict):
+def save_json(jobs_by_id: dict[str, dict[str, Any]], json_path: Path) -> None:
+    with json_path.open("w", encoding="utf-8") as file:
+        json.dump(list(jobs_by_id.values()), file, indent=2)
+
+
+def save_csv(jobs_by_id: dict[str, dict[str, Any]], csv_path: Path) -> None:
     if not jobs_by_id:
         return
+
     rows = list(jobs_by_id.values())
-    flat_rows = []
-    for r in rows:
-        flat = dict(r)
-        flat["other_locations"] = "; ".join(r.get("other_locations") or [])
-        flat["flex_fields"]     = json.dumps(r.get("flex_fields") or {})
-        flat_rows.append(flat)
-    fields = list(flat_rows[0].keys())
-    with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
+    normalized_rows = []
+    for row in rows:
+        flat = dict(row)
+        flat["other_locations"] = "; ".join(row.get("other_locations") or [])
+        flat["flex_fields"] = json.dumps(row.get("flex_fields") or {})
+        normalized_rows.append(flat)
+
+    fields = list(normalized_rows[0].keys())
+    with csv_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fields)
         writer.writeheader()
-        writer.writerows(flat_rows)
+        writer.writerows(normalized_rows)
 
-def persist(jobs_by_id: dict):
-    """Write full state to disk after every page — safe incremental save."""
-    save_json(jobs_by_id)
-    save_csv(jobs_by_id)
 
-# ==========================
-# CRAWLER
-# ==========================
+def persist(jobs_by_id: dict[str, dict[str, Any]], json_path: Path, csv_path: Path) -> None:
+    save_json(jobs_by_id, json_path)
+    save_csv(jobs_by_id, csv_path)
 
-def fetch_page(keyword: str, offset: int) -> list | None:
-    """Returns list of requisitions, [] if exhausted, None on hard error."""
+
+def fetch_page(
+    config: OracleHCMCrawlerConfig,
+    headers: dict[str, str],
+    keyword: str,
+    offset: int,
+) -> list[dict[str, Any]] | None:
     params = {
         "onlyData": "true",
-        "expand":   EXPAND_FIELDS,
-        "finder":   build_finder(keyword, offset),
+        "expand": config.expand_fields,
+        "finder": build_finder(config, keyword, offset),
     }
-    try:
-        resp = requests.get(BASE_URL, params=params, headers=HEADERS, timeout=20)
-    except requests.RequestException as e:
-        print(f"    [!] Network error: {e}")
-        return None
-
-    if resp.status_code == 429:
-        wait = int(resp.headers.get("Retry-After", 15))
-        print(f"    [!] Rate limited — waiting {wait}s")
-        time.sleep(wait)
-        return fetch_page(keyword, offset)  # one retry
-
-    if resp.status_code != 200:
-        print(f"    [!] HTTP {resp.status_code}: {resp.text[:300]}")
-        return None
 
     try:
-        data = resp.json()
-        return data["items"][0].get("requisitionList", [])
-    except (KeyError, IndexError, json.JSONDecodeError) as e:
-        print(f"    [!] Parse error: {e}")
+        response = requests.get(
+            config.endpoint,
+            params=params,
+            headers=headers,
+            timeout=config.request_timeout_seconds,
+        )
+    except requests.RequestException as err:
+        print(f"    [!] Network error: {err}")
+        return None
+
+    if response.status_code == 429:
+        wait_seconds = int(response.headers.get("Retry-After", config.retry_after_seconds))
+        print(f"    [!] Rate limited, waiting {wait_seconds}s")
+        time.sleep(wait_seconds)
+        return fetch_page(config, headers, keyword, offset)
+
+    if response.status_code != 200:
+        print(f"    [!] HTTP {response.status_code}: {response.text[:300]}")
+        return None
+
+    try:
+        data = response.json()
+        items = data.get("items", [])
+        if not items:
+            return []
+        return items[0].get("requisitionList", [])
+    except (ValueError, KeyError, IndexError, TypeError) as err:
+        print(f"    [!] Parse error: {err}")
         return None
 
 
-def crawl_keyword(keyword: str, jobs_by_id: dict) -> dict:
-    offset    = 0
-    page      = 1
+def crawl_keyword(
+    config: OracleHCMCrawlerConfig,
+    headers: dict[str, str],
+    keyword: str,
+    jobs_by_id: dict[str, dict[str, Any]],
+    json_path: Path,
+    csv_path: Path,
+) -> dict[str, dict[str, Any]]:
+    offset = 0
+    page = 1
     new_count = 0
 
     print(f'\n  Searching: "{keyword}"')
 
     while True:
-        print(f"    Page {page:>3} | offset {offset:>5}", end=" → ")
-        reqs = fetch_page(keyword, offset)
+        print(f"    Page {page:>3} | offset {offset:>5} -> ", end="")
+        requisitions = fetch_page(config, headers, keyword, offset)
 
-        if reqs is None:
-            print("Error — skipping.")
+        if requisitions is None:
+            print("Error, skipping keyword.")
             break
-        if not reqs:
+        if not requisitions:
             print("No more results.")
             break
 
         new_on_page = 0
-        for job in reqs:
-            jid = job.get("Id")
-            if jid and jid not in jobs_by_id:
-                jobs_by_id[jid] = format_job(job)
+        for job in requisitions:
+            job_id = str(job.get("Id", "")).strip()
+            if job_id and job_id not in jobs_by_id:
+                jobs_by_id[job_id] = format_job(config, job)
                 new_on_page += 1
 
         new_count += new_on_page
-        print(f"{new_on_page} new  |  total saved: {len(jobs_by_id)}")
+        print(f"{new_on_page} new | total saved: {len(jobs_by_id)}")
 
-        # Save after every page so nothing is lost on crash
-        persist(jobs_by_id)
+        persist(jobs_by_id, json_path, csv_path)
 
-        if len(reqs) < PAGE_SIZE:
+        if len(requisitions) < config.page_size:
             print("    Last page reached.")
             break
 
-        offset += PAGE_SIZE
-        page   += 1
-        time.sleep(0.75)
+        offset += config.page_size
+        page += 1
+        time.sleep(config.inter_page_sleep_seconds)
 
-    print(f'  Done: "{keyword}" — {new_count} new jobs added.')
+    print(f'  Done: "{keyword}" -> {new_count} new jobs added.')
     return jobs_by_id
 
 
-# ==========================
-# ENTRY POINT
-# ==========================
+def crawl_jobs(config: OracleHCMCrawlerConfig) -> dict[str, Any]:
+    headers = build_headers(config)
+    json_path, csv_path = get_output_paths(config)
 
-if __name__ == "__main__":
     print("=" * 60)
-    print("  JPMorgan AI/ML Jobs — India Crawler")
-    print(f"  Location : {INDIA_LOCATION_ID}  |  Category : {AI_CATEGORY_ID}")
+    print(f"  {config.company_name} Jobs Crawler")
+    print(f"  Endpoint : {config.endpoint}")
     print(f"  Started  : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
     print("=" * 60)
 
-    jobs_by_id = load_existing()
+    jobs_by_id = load_existing(json_path)
+    if jobs_by_id:
+        print(f"Resumed with {len(jobs_by_id)} previously saved jobs.")
 
-    for kw in AI_KEYWORDS:
-        jobs_by_id = crawl_keyword(kw, jobs_by_id)
-        time.sleep(1.5)  # pause between keyword sweeps
+    for keyword in config.keywords:
+        jobs_by_id = crawl_keyword(
+            config=config,
+            headers=headers,
+            keyword=keyword,
+            jobs_by_id=jobs_by_id,
+            json_path=json_path,
+            csv_path=csv_path,
+        )
+        time.sleep(config.inter_keyword_sleep_seconds)
+
+    persist(jobs_by_id, json_path, csv_path)
 
     print("\n" + "=" * 60)
-    print(f"  TOTAL UNIQUE AI/ML India Jobs : {len(jobs_by_id)}")
-    print(f"  JSON -> {OUTPUT_JSON}")
-    print(f"  CSV  -> {OUTPUT_CSV}")
+    print(f"  TOTAL UNIQUE JOBS: {len(jobs_by_id)}")
+    print(f"  JSON -> {json_path}")
+    print(f"  CSV  -> {csv_path}")
     print("=" * 60)
 
-    print("\n── Most Recent Listings ──")
-    for job in sorted(jobs_by_id.values(), key=lambda x: x["posted"], reverse=True)[:20]:
-        print(f"\n[{job['posted'][:10]}] {job['title']}")
-        print(f"  Location : {job['primary_location']}  |  {job['workplace_type']}")
-        print(f"  Apply    : {job['apply_url']}")
+    recent = sorted(jobs_by_id.values(), key=lambda item: item.get("posted", ""), reverse=True)[:20]
+    if recent:
+        print("\nMost Recent Listings")
+        for job in recent:
+            print(f"\n[{str(job.get('posted', ''))[:10]}] {job.get('title', '')}")
+            print(f"  Location : {job.get('primary_location', '')}")
+            print(f"  Apply    : {job.get('apply_url', '')}")
+
+    return {
+        "status": "success",
+        "company_name": config.company_name,
+        "jobs_count": len(jobs_by_id),
+        "output_json": str(json_path),
+        "output_csv": str(csv_path),
+    }
+
+
+def run_crawler(
+    company_name: str,
+    endpoint: str,
+    keywords: list[str] | None = None,
+    site_number: str | None = None,
+    location_id: str | None = None,
+    category_id: str | None = None,
+    output_dir: str = "dataset",
+) -> dict[str, Any]:
+    config = OracleHCMCrawlerConfig(
+        company_name=company_name,
+        endpoint=endpoint,
+        keywords=keywords or DEFAULT_KEYWORDS,
+        site_number=site_number,
+        location_id=location_id,
+        category_id=category_id,
+        output_dir=output_dir,
+    )
+    return crawl_jobs(config)
+
+
+def parse_keywords(value: str | None) -> list[str]:
+    if not value:
+        return DEFAULT_KEYWORDS
+    keywords = [item.strip() for item in value.split(",") if item.strip()]
+    return keywords or DEFAULT_KEYWORDS
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Generic Oracle HCM job crawler for similar career endpoints."
+    )
+    parser.add_argument("--company", required=True, help="Company display name")
+    parser.add_argument("--endpoint", required=True, help="Recruiting API endpoint URL")
+    parser.add_argument("--site-number", default=None, help="Site number (e.g., CX_1001)")
+    parser.add_argument("--location-id", default=None, help="Optional location facet ID")
+    parser.add_argument("--category-id", default=None, help="Optional category facet ID")
+    parser.add_argument(
+        "--keywords",
+        default=None,
+        help="Comma-separated keywords. Example: 'AI,LLM,Python'",
+    )
+    parser.add_argument("--output-dir", default="dataset", help="Output folder path")
+    return parser
+
+
+if __name__ == "__main__":
+    cli = build_arg_parser().parse_args()
+    result = run_crawler(
+        company_name=cli.company,
+        endpoint=cli.endpoint,
+        keywords=parse_keywords(cli.keywords),
+        site_number=cli.site_number,
+        location_id=cli.location_id,
+        category_id=cli.category_id,
+        output_dir=cli.output_dir,
+    )
+
+    if result.get("status") != "success":
+        raise SystemExit(1)
