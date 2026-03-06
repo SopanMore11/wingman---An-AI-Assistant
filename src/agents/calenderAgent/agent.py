@@ -2,7 +2,7 @@ import os
 import datetime
 from dotenv import load_dotenv
 from google.adk.agents.llm_agent import Agent
-from google_authenticator import authenticate_google_calendar
+from src.google_authenticator import authenticate_google_calendar
 from google.adk.models import LiteLlm
 from .tools import (
     get_current_datetime,

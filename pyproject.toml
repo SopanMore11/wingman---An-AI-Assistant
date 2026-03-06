@@ -9,4 +9,5 @@ dependencies = [
     "google-api-python-client>=2.188.0",
     "google-auth-httplib2>=0.3.0",
     "google-auth-oauthlib>=1.2.4",
+    "python-telegram-bot>=22.6",
 ]

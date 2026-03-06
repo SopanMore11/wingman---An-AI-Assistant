@@ -1,4 +1,4 @@
-from google_authenticator import authenticate_google_calendar
+from src.google_authenticator import authenticate_google_calendar
 import datetime
 import os
 from dotenv import load_dotenv
