@@ -37,9 +37,9 @@ service = authenticate_google_calendar()
 #     print(result)
 
 model = LiteLlm(
-    model="groq/openai/gpt-oss-120b",  # use "groq/<groq-model-name>",
+    model="groq/moonshotai/kimi-k2-instruct-0905",  # use "groq/<groq-model-name>",
 )
-model = "gemini-3-flash-preview"
+# model = "gemini-3-flash-preview"
 
 root_agent = Agent(
     model=model,

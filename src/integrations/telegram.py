@@ -1,12 +1,14 @@
 import os
 import uuid
 from collections.abc import Awaitable, Callable, Iterable
+import logging
 
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 MAX_TELEGRAM_MESSAGE_LEN = 4000
+logger = logging.getLogger("wingman.telegram")
 
 AskFn = Callable[[str, str, str], Awaitable[str]]
 
@@ -36,6 +38,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Bot is online. Send any message and I will forward it to the orchestrator."
     )
+    logger.info("Handled /start command")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -48,6 +51,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/start - Start the bot\n"
         "/help - Show this help"
     )
+    logger.info("Handled /help command")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -60,6 +64,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = str(user.id if user else "unknown_user")
     session_chat_id = str(chat.id if chat else uuid.uuid4().hex)
     session_id = f"tg_chat_{session_chat_id}"
+    logger.info("Incoming message | user_id=%s | chat_id=%s", user_id, session_chat_id)
 
     ask_fn: AskFn = context.application.bot_data["ask_fn"]
 
@@ -69,6 +74,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         session_id=session_id,
         text=update.message.text,
     )
+    logger.info("Orchestrator response received | user_id=%s | chars=%s", user_id, len(response_text))
 
     for part in _chunk_text(response_text):
         await update.message.reply_text(part)
@@ -87,6 +93,7 @@ def build_telegram_application(
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    logger.info("Telegram application built with command and message handlers")
     return application
 
 

@@ -20,7 +20,7 @@ os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 
 model = LiteLlm(
-    model="groq/openai/gpt-oss-120b",
+    model="groq/moonshotai/kimi-k2-instruct-0905",
 )
 
 root_agent = Agent(
