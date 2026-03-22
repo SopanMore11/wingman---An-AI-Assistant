@@ -1,64 +1,12 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
-CSV_ENV_VAR = "EXPENSES_CSV"
-DEFAULT_CSV_NAME = "dataset/my_expences.csv"
-COLUMNS = ["Date", "Day", "Category", "Description", "Amount", "Notes"]
+from src.data.sqlite_store import get_connection, initialize_database
 
 
 class ExpenseTools:
-    def __init__(self, default_csv_name: str = DEFAULT_CSV_NAME):
-        self.default_csv_name = default_csv_name
-
-    def _resolve_csv_path(self, csv_file: str | None = None) -> Path:
-        if csv_file:
-            return Path(csv_file)
-
-        env_value = str(os.getenv(CSV_ENV_VAR, "")).strip()
-        if env_value:
-            return Path(env_value)
-
-        # Prefer the repository-level `dataset/my_expences.csv` (project root)
-        repo_root = Path(__file__).resolve().parents[3]
-        return repo_root / self.default_csv_name
-
-    @staticmethod
-    def _empty_df() -> pd.DataFrame:
-        return pd.DataFrame(columns=COLUMNS)
-
-    @staticmethod
-    def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
-        normalized = df.copy()
-        for column in COLUMNS:
-            if column not in normalized.columns:
-                normalized[column] = ""
-        normalized = normalized[COLUMNS]
-        normalized["Amount"] = pd.to_numeric(normalized["Amount"], errors="coerce").fillna(0.0)
-        return normalized
-
-    def _load_expenses(self, csv_path: Path) -> pd.DataFrame:
-        if not csv_path.exists():
-            return self._empty_df()
-
-        try:
-            df = pd.read_csv(csv_path)
-            return self._normalize_df(df)
-        except Exception:
-            return self._empty_df()
-
-    @staticmethod
-    def _save_expenses(df: pd.DataFrame, csv_path: Path) -> None:
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = csv_path.with_suffix(f"{csv_path.suffix}.tmp")
-        df.to_csv(temp_path, index=False)
-        os.replace(temp_path, csv_path)
-
     @staticmethod
     def _parse_date(date_str: str) -> datetime:
         return datetime.strptime(date_str, "%Y-%m-%d")
@@ -71,9 +19,23 @@ class ExpenseTools:
     def _build_error(message: str) -> dict[str, Any]:
         return {"status": "error", "message": message}
 
-    # -------------------------------------------------------------------------
-    # Original tools
-    # -------------------------------------------------------------------------
+    @staticmethod
+    def _row_to_record(row: Any, row_index: int | None = None) -> dict[str, Any]:
+        record = {
+            "Date": row["expense_date"],
+            "Day": row["day"],
+            "Category": row["category"],
+            "Description": row["description"],
+            "Amount": float(row["amount"]),
+            "Notes": row["notes"],
+        }
+        if row_index is not None:
+            record["row_index"] = row_index
+        return record
+
+    @staticmethod
+    def _resolve_db_path(_: str | None = None) -> str:
+        return str(initialize_database())
 
     def add_daily_expense(
         self,
@@ -84,16 +46,6 @@ class ExpenseTools:
         notes: str = "",
         csv_file: str | None = None,
     ) -> dict[str, Any]:
-        """Add one expense record.
-
-        Args:
-            date:        Date of the expense in YYYY-MM-DD format.
-            category:    Broad category, e.g. "Food", "Transport", "Rent".
-            description: Short description of what was spent on.
-            amount:      Positive number representing how much was spent.
-            notes:       (Optional) any extra context you want to remember.
-            csv_file:    (Optional) path to a custom CSV file.
-        """
         try:
             parsed_date = self._parse_date(date)
         except ValueError:
@@ -116,9 +68,7 @@ class ExpenseTools:
         if safe_amount <= 0:
             return self._build_error("Amount must be greater than 0.")
 
-        csv_path = self._resolve_csv_path(csv_file)
-        df = self._load_expenses(csv_path)
-
+        db_path = self._resolve_db_path(csv_file)
         new_row = {
             "Date": parsed_date.strftime("%Y-%m-%d"),
             "Day": parsed_date.strftime("%A"),
@@ -128,44 +78,37 @@ class ExpenseTools:
             "Notes": safe_notes,
         }
 
-        if df.empty:
-            updated_df = pd.DataFrame([new_row], columns=COLUMNS)
-        else:
-            updated_df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-        self._save_expenses(updated_df, csv_path)
+        with get_connection(db_path) as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO expenses (expense_date, day, category, description, amount, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_row["Date"],
+                    new_row["Day"],
+                    new_row["Category"],
+                    new_row["Description"],
+                    new_row["Amount"],
+                    new_row["Notes"],
+                ),
+            )
+            total_records = conn.execute("SELECT COUNT(*) AS count FROM expenses").fetchone()["count"]
+            inserted_id = cursor.lastrowid
+            order_row = conn.execute(
+                "SELECT COUNT(*) AS count FROM expenses WHERE id <= ?",
+                (inserted_id,),
+            ).fetchone()
+            row_index = int(order_row["count"]) - 1 if order_row else 0
 
         return self._build_success(
             {
                 "message": "Expense added.",
-                "expense": new_row,
-                "total_records": len(updated_df),
-                "csv_path": str(csv_path),
+                "expense": {**new_row, "row_index": row_index},
+                "total_records": int(total_records),
+                "db_path": db_path,
             }
         )
-
-    @staticmethod
-    def _aggregate_by_category(
-        df: pd.DataFrame,
-        *,
-        year: int,
-        month: int | None = None,
-        week: int | None = None,
-    ) -> dict[str, float]:
-        working = df.copy()
-        working["Date"] = pd.to_datetime(working["Date"], errors="coerce")
-        working = working.dropna(subset=["Date"])
-
-        if month is not None:
-            filtered = working[
-                (working["Date"].dt.year == year)
-                & (working["Date"].dt.month == month)
-            ]
-        else:
-            iso = working["Date"].dt.isocalendar()
-            filtered = working[(iso["year"] == year) & (iso["week"] == week)]
-
-        grouped = filtered.groupby("Category", dropna=False)["Amount"].sum().sort_values(ascending=False)
-        return {str(k): float(v) for k, v in grouped.to_dict().items()}
 
     def monthly_category_expense(
         self,
@@ -173,25 +116,30 @@ class ExpenseTools:
         month: int,
         csv_file: str | None = None,
     ) -> dict[str, Any]:
-        """Get category totals for a given month.
-
-        Args:
-            year:     4-digit year, e.g. 2025.
-            month:    Month number 1–12.
-            csv_file: (Optional) path to a custom CSV file.
-        """
         if month < 1 or month > 12:
             return self._build_error("Month must be between 1 and 12.")
 
-        csv_path = self._resolve_csv_path(csv_file)
-        df = self._load_expenses(csv_path)
-        totals = self._aggregate_by_category(df, year=year, month=month)
+        db_path = self._resolve_db_path(csv_file)
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT category, SUM(amount) AS total_amount
+                FROM expenses
+                WHERE strftime('%Y', expense_date) = ?
+                  AND strftime('%m', expense_date) = ?
+                GROUP BY category
+                ORDER BY total_amount DESC, category ASC
+                """,
+                (f"{year:04d}", f"{month:02d}"),
+            ).fetchall()
+
+        totals = {str(row["category"]): float(row["total_amount"]) for row in rows}
         return self._build_success(
             {
                 "year": year,
                 "month": month,
                 "category_totals": totals,
-                "csv_path": str(csv_path),
+                "db_path": db_path,
             }
         )
 
@@ -201,31 +149,32 @@ class ExpenseTools:
         week: int,
         csv_file: str | None = None,
     ) -> dict[str, Any]:
-        """Get category totals for a given ISO week.
-
-        Args:
-            year:     4-digit year, e.g. 2025.
-            week:     ISO week number 1–53.
-            csv_file: (Optional) path to a custom CSV file.
-        """
         if week < 1 or week > 53:
             return self._build_error("Week must be between 1 and 53.")
 
-        csv_path = self._resolve_csv_path(csv_file)
-        df = self._load_expenses(csv_path)
-        totals = self._aggregate_by_category(df, year=year, week=week)
+        db_path = self._resolve_db_path(csv_file)
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT category, SUM(amount) AS total_amount
+                FROM expenses
+                WHERE strftime('%Y', date(expense_date, '-3 days', 'weekday 4')) = ?
+                  AND printf('%02d', CAST(strftime('%W', date(expense_date, '-3 days', 'weekday 4')) AS INTEGER) + 1) = ?
+                GROUP BY category
+                ORDER BY total_amount DESC, category ASC
+                """,
+                (f"{year:04d}", f"{week:02d}"),
+            ).fetchall()
+
+        totals = {str(row["category"]): float(row["total_amount"]) for row in rows}
         return self._build_success(
             {
                 "year": year,
                 "week": week,
                 "category_totals": totals,
-                "csv_path": str(csv_path),
+                "db_path": db_path,
             }
         )
-
-    # -------------------------------------------------------------------------
-    # New tools
-    # -------------------------------------------------------------------------
 
     def get_expense_summary(
         self,
@@ -233,18 +182,6 @@ class ExpenseTools:
         end_date: str,
         csv_file: str | None = None,
     ) -> dict[str, Any]:
-        """Get total spending and a per-category breakdown for any date range.
-
-        Useful for ad-hoc periods like a holiday, a trip, or a quarter.
-
-        Args:
-            start_date: Start of the range in YYYY-MM-DD format (inclusive).
-            end_date:   End of the range in YYYY-MM-DD format (inclusive).
-            csv_file:   (Optional) path to a custom CSV file.
-
-        Returns:
-            total_amount, record_count, category_totals, and the date range used.
-        """
         try:
             start = self._parse_date(start_date)
             end = self._parse_date(end_date)
@@ -254,27 +191,38 @@ class ExpenseTools:
         if end < start:
             return self._build_error("end_date must be on or after start_date.")
 
-        csv_path = self._resolve_csv_path(csv_file)
-        df = self._load_expenses(csv_path)
-
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        mask = (df["Date"] >= pd.Timestamp(start)) & (df["Date"] <= pd.Timestamp(end))
-        filtered = df[mask]
-
-        category_totals = (
-            filtered.groupby("Category", dropna=False)["Amount"]
-            .sum()
-            .sort_values(ascending=False)
-        )
+        db_path = self._resolve_db_path(csv_file)
+        with get_connection(db_path) as conn:
+            summary_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0) AS total_amount, COUNT(*) AS record_count
+                FROM expenses
+                WHERE expense_date BETWEEN ? AND ?
+                """,
+                (start_date, end_date),
+            ).fetchone()
+            category_rows = conn.execute(
+                """
+                SELECT category, SUM(amount) AS total_amount
+                FROM expenses
+                WHERE expense_date BETWEEN ? AND ?
+                GROUP BY category
+                ORDER BY total_amount DESC, category ASC
+                """,
+                (start_date, end_date),
+            ).fetchall()
 
         return self._build_success(
             {
                 "start_date": start_date,
                 "end_date": end_date,
-                "total_amount": float(filtered["Amount"].sum()),
-                "record_count": len(filtered),
-                "category_totals": {str(k): float(v) for k, v in category_totals.to_dict().items()},
-                "csv_path": str(csv_path),
+                "total_amount": float(summary_row["total_amount"]),
+                "record_count": int(summary_row["record_count"]),
+                "category_totals": {
+                    str(row["category"]): float(row["total_amount"])
+                    for row in category_rows
+                },
+                "db_path": db_path,
             }
         )
 
@@ -288,71 +236,74 @@ class ExpenseTools:
         max_amount: float | None = None,
         csv_file: str | None = None,
     ) -> dict[str, Any]:
-        """Search and filter expenses using one or more criteria.
-
-        All filters are optional and combined with AND logic when provided.
-
-        Args:
-            keyword:    Text to look for in Description or Notes (case-insensitive).
-            category:   Exact category name to filter by (case-insensitive).
-            start_date: Only include expenses on or after this date (YYYY-MM-DD).
-            end_date:   Only include expenses on or before this date (YYYY-MM-DD).
-            min_amount: Only include expenses with amount >= this value.
-            max_amount: Only include expenses with amount <= this value.
-            csv_file:   (Optional) path to a custom CSV file.
-
-        Returns:
-            List of matching expense records and a count.
-        """
-        csv_path = self._resolve_csv_path(csv_file)
-        df = self._load_expenses(csv_path)
-
-        if df.empty:
-            return self._build_success({"matches": [], "count": 0, "csv_path": str(csv_path)})
-
-        working = df.copy()
-        working["Date"] = pd.to_datetime(working["Date"], errors="coerce")
-
-        if keyword:
-            kw = keyword.lower()
-            mask = (
-                working["Description"].str.lower().str.contains(kw, na=False)
-                | working["Notes"].str.lower().str.contains(kw, na=False)
-            )
-            working = working[mask]
-
-        if category:
-            working = working[working["Category"].str.lower() == category.lower()]
-
         if start_date:
             try:
-                start = pd.Timestamp(self._parse_date(start_date))
-                working = working[working["Date"] >= start]
+                self._parse_date(start_date)
             except ValueError:
                 return self._build_error("Invalid start_date format. Expected YYYY-MM-DD.")
 
         if end_date:
             try:
-                end = pd.Timestamp(self._parse_date(end_date))
-                working = working[working["Date"] <= end]
+                self._parse_date(end_date)
             except ValueError:
                 return self._build_error("Invalid end_date format. Expected YYYY-MM-DD.")
 
+        db_path = self._resolve_db_path(csv_file)
+        query = """
+            SELECT
+                id,
+                expense_date,
+                day,
+                category,
+                description,
+                amount,
+                notes,
+                ROW_NUMBER() OVER (ORDER BY id) - 1 AS row_index
+            FROM expenses
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+
+        if keyword:
+            query += " AND (LOWER(description) LIKE ? OR LOWER(notes) LIKE ?)"
+            pattern = f"%{keyword.strip().lower()}%"
+            params.extend([pattern, pattern])
+
+        if category:
+            query += " AND LOWER(category) = ?"
+            params.append(category.strip().lower())
+
+        if start_date:
+            query += " AND expense_date >= ?"
+            params.append(start_date)
+
+        if end_date:
+            query += " AND expense_date <= ?"
+            params.append(end_date)
+
         if min_amount is not None:
-            working = working[working["Amount"] >= min_amount]
+            query += " AND amount >= ?"
+            params.append(min_amount)
 
         if max_amount is not None:
-            working = working[working["Amount"] <= max_amount]
+            query += " AND amount <= ?"
+            params.append(max_amount)
 
-        # Convert dates back to strings for a clean JSON-friendly output
-        working = working.copy()
-        working["Date"] = working["Date"].dt.strftime("%Y-%m-%d").fillna("")
+        query += " ORDER BY id"
+
+        with get_connection(db_path) as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        matches = [
+            self._row_to_record(row, row_index=int(row["row_index"]))
+            for row in rows
+        ]
 
         return self._build_success(
             {
-                "matches": working.to_dict(orient="records"),
-                "count": len(working),
-                "csv_path": str(csv_path),
+                "matches": matches,
+                "count": len(matches),
+                "db_path": db_path,
             }
         )
 
@@ -361,41 +312,39 @@ class ExpenseTools:
         row_index: int,
         csv_file: str | None = None,
     ) -> dict[str, Any]:
-        """Delete a single expense by its row index (0-based).
+        db_path = self._resolve_db_path(csv_file)
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT id, expense_date, day, category, description, amount, notes
+                FROM expenses
+                ORDER BY id
+                LIMIT 1 OFFSET ?
+                """,
+                (row_index,),
+            ).fetchone()
 
-        Use ``search_expenses`` first to find the exact row you want to remove,
-        then pass the ``row_index`` from those results here.
+            total_row = conn.execute("SELECT COUNT(*) AS count FROM expenses").fetchone()
+            total_records = int(total_row["count"]) if total_row else 0
 
-        Args:
-            row_index: The 0-based position of the row in the CSV (as returned
-                       by search_expenses results order).
-            csv_file:  (Optional) path to a custom CSV file.
+            if total_records == 0:
+                return self._build_error("No expenses found in the database.")
 
-        Returns:
-            The deleted expense record and the updated total row count.
-        """
-        csv_path = self._resolve_csv_path(csv_file)
-        df = self._load_expenses(csv_path)
+            if row is None:
+                return self._build_error(
+                    f"row_index {row_index} is out of range. Valid range: 0 to {total_records - 1}."
+                )
 
-        if df.empty:
-            return self._build_error("No expenses found in the file.")
+            conn.execute("DELETE FROM expenses WHERE id = ?", (row["id"],))
+            remaining_records = conn.execute("SELECT COUNT(*) AS count FROM expenses").fetchone()["count"]
 
-        if row_index < 0 or row_index >= len(df):
-            return self._build_error(
-                f"row_index {row_index} is out of range. "
-                f"Valid range: 0 to {len(df) - 1}."
-            )
-
-        deleted_row = df.iloc[row_index].to_dict()
-        updated_df = df.drop(index=row_index).reset_index(drop=True)
-        self._save_expenses(updated_df, csv_path)
-
+        deleted_expense = self._row_to_record(row, row_index=row_index)
         return self._build_success(
             {
                 "message": "Expense deleted.",
-                "deleted_expense": deleted_row,
-                "remaining_records": len(updated_df),
-                "csv_path": str(csv_path),
+                "deleted_expense": deleted_expense,
+                "remaining_records": int(remaining_records),
+                "db_path": db_path,
             }
         )
 
@@ -408,71 +357,77 @@ class ExpenseTools:
         notes: str | None = None,
         csv_file: str | None = None,
     ) -> dict[str, Any]:
-        """Update one or more fields of an existing expense record.
+        db_path = self._resolve_db_path(csv_file)
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT id, expense_date, day, category, description, amount, notes
+                FROM expenses
+                ORDER BY id
+                LIMIT 1 OFFSET ?
+                """,
+                (row_index,),
+            ).fetchone()
 
-        Only the fields you pass will be changed; everything else stays the same.
-        Use ``search_expenses`` first to locate the right row index.
+            total_row = conn.execute("SELECT COUNT(*) AS count FROM expenses").fetchone()
+            total_records = int(total_row["count"]) if total_row else 0
 
-        Note: Date and Day cannot be edited to keep the timeline consistent.
+            if total_records == 0:
+                return self._build_error("No expenses found in the database.")
 
-        Args:
-            row_index:   The 0-based position of the row to edit.
-            category:    New category value (leave None to keep existing).
-            description: New description (leave None to keep existing).
-            amount:      New amount — must be a positive number (leave None to keep existing).
-            notes:       New notes (leave None to keep existing).
-            csv_file:    (Optional) path to a custom CSV file.
+            if row is None:
+                return self._build_error(
+                    f"row_index {row_index} is out of range. Valid range: 0 to {total_records - 1}."
+                )
 
-        Returns:
-            The original and updated versions of the expense record.
-        """
-        csv_path = self._resolve_csv_path(csv_file)
-        df = self._load_expenses(csv_path)
+            updates: dict[str, Any] = {}
+            if category is not None:
+                safe = category.strip()
+                if not safe:
+                    return self._build_error("Category cannot be empty.")
+                updates["category"] = safe
 
-        if df.empty:
-            return self._build_error("No expenses found in the file.")
+            if description is not None:
+                safe = description.strip()
+                if not safe:
+                    return self._build_error("Description cannot be empty.")
+                updates["description"] = safe
 
-        if row_index < 0 or row_index >= len(df):
-            return self._build_error(
-                f"row_index {row_index} is out of range. "
-                f"Valid range: 0 to {len(df) - 1}."
-            )
+            if amount is not None:
+                try:
+                    safe_amount = float(amount)
+                except (TypeError, ValueError):
+                    return self._build_error("Amount must be a number.")
+                if safe_amount <= 0:
+                    return self._build_error("Amount must be greater than 0.")
+                updates["amount"] = safe_amount
 
-        original = df.iloc[row_index].to_dict()
+            if notes is not None:
+                updates["notes"] = notes.strip()
 
-        if category is not None:
-            safe = category.strip()
-            if not safe:
-                return self._build_error("Category cannot be empty.")
-            df.at[row_index, "Category"] = safe
+            original = self._row_to_record(row, row_index=row_index)
 
-        if description is not None:
-            safe = description.strip()
-            if not safe:
-                return self._build_error("Description cannot be empty.")
-            df.at[row_index, "Description"] = safe
+            if updates:
+                assignments = ", ".join(f"{column} = ?" for column in updates)
+                params = list(updates.values()) + [row["id"]]
+                conn.execute(f"UPDATE expenses SET {assignments} WHERE id = ?", params)
 
-        if amount is not None:
-            try:
-                safe_amount = float(amount)
-            except (TypeError, ValueError):
-                return self._build_error("Amount must be a number.")
-            if safe_amount <= 0:
-                return self._build_error("Amount must be greater than 0.")
-            df.at[row_index, "Amount"] = safe_amount
+            updated_row = conn.execute(
+                """
+                SELECT id, expense_date, day, category, description, amount, notes
+                FROM expenses
+                WHERE id = ?
+                """,
+                (row["id"],),
+            ).fetchone()
 
-        if notes is not None:
-            df.at[row_index, "Notes"] = notes.strip()
-
-        self._save_expenses(df, csv_path)
-        updated = df.iloc[row_index].to_dict()
-
+        updated = self._row_to_record(updated_row, row_index=row_index)
         return self._build_success(
             {
                 "message": "Expense updated.",
                 "original": original,
                 "updated": updated,
-                "csv_path": str(csv_path),
+                "db_path": db_path,
             }
         )
 
@@ -483,19 +438,6 @@ class ExpenseTools:
         top_n: int = 5,
         csv_file: str | None = None,
     ) -> dict[str, Any]:
-        """Find the N days with the highest total spending within a date range.
-
-        Great for spotting splurge days or anomalies in your spending pattern.
-
-        Args:
-            start_date: Start of the range in YYYY-MM-DD format (inclusive).
-            end_date:   End of the range in YYYY-MM-DD format (inclusive).
-            top_n:      How many top days to return (default: 5).
-            csv_file:   (Optional) path to a custom CSV file.
-
-        Returns:
-            A ranked list of dates with their total spend and individual records.
-        """
         try:
             start = self._parse_date(start_date)
             end = self._parse_date(end_date)
@@ -508,43 +450,56 @@ class ExpenseTools:
         if top_n < 1:
             return self._build_error("top_n must be at least 1.")
 
-        csv_path = self._resolve_csv_path(csv_file)
-        df = self._load_expenses(csv_path)
+        db_path = self._resolve_db_path(csv_file)
+        with get_connection(db_path) as conn:
+            top_days = conn.execute(
+                """
+                SELECT expense_date, day, SUM(amount) AS total_amount
+                FROM expenses
+                WHERE expense_date BETWEEN ? AND ?
+                GROUP BY expense_date, day
+                ORDER BY total_amount DESC, expense_date ASC
+                LIMIT ?
+                """,
+                (start_date, end_date, top_n),
+            ).fetchall()
 
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        mask = (df["Date"] >= pd.Timestamp(start)) & (df["Date"] <= pd.Timestamp(end))
-        filtered = df[mask].copy()
-
-        if filtered.empty:
-            return self._build_success(
-                {"top_days": [], "csv_path": str(csv_path)}
-            )
-
-        daily_totals = (
-            filtered.groupby(filtered["Date"].dt.strftime("%Y-%m-%d"))["Amount"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(top_n)
-        )
-
-        top_days = []
-        for date_str, total in daily_totals.items():
-            day_records = filtered[filtered["Date"].dt.strftime("%Y-%m-%d") == date_str]
-            top_days.append(
-                {
-                    "date": date_str,
-                    "day_of_week": day_records["Day"].iloc[0] if len(day_records) else "",
-                    "total_amount": float(total),
-                    "records": day_records.assign(Date=date_str).to_dict(orient="records"),
-                }
-            )
+            result = []
+            for top_day in top_days:
+                records = conn.execute(
+                    """
+                    SELECT
+                        expense_date,
+                        day,
+                        category,
+                        description,
+                        amount,
+                        notes,
+                        ROW_NUMBER() OVER (ORDER BY id) - 1 AS row_index
+                    FROM expenses
+                    WHERE expense_date = ?
+                    ORDER BY id
+                    """,
+                    (top_day["expense_date"],),
+                ).fetchall()
+                result.append(
+                    {
+                        "date": top_day["expense_date"],
+                        "day_of_week": top_day["day"],
+                        "total_amount": float(top_day["total_amount"]),
+                        "records": [
+                            self._row_to_record(record, row_index=int(record["row_index"]))
+                            for record in records
+                        ],
+                    }
+                )
 
         return self._build_success(
             {
                 "start_date": start_date,
                 "end_date": end_date,
-                "top_days": top_days,
-                "csv_path": str(csv_path),
+                "top_days": result,
+                "db_path": db_path,
             }
         )
 
@@ -554,48 +509,40 @@ class ExpenseTools:
         year: int,
         csv_file: str | None = None,
     ) -> dict[str, Any]:
-        """Show month-by-month spending for a single category across a whole year.
-
-        Useful for spotting seasonal patterns or whether a habit is getting more
-        or less expensive over time.
-
-        Args:
-            category: The category name to track (case-insensitive).
-            year:     The 4-digit year to analyse, e.g. 2025.
-            csv_file: (Optional) path to a custom CSV file.
-
-        Returns:
-            A list of 12 month entries with the spend for that category,
-            plus the yearly total and the month with the highest spend.
-        """
         if not category or not category.strip():
             return self._build_error("Category is required.")
 
-        csv_path = self._resolve_csv_path(csv_file)
-        df = self._load_expenses(csv_path)
-
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        cat_mask = df["Category"].str.lower() == category.strip().lower()
-        year_mask = df["Date"].dt.year == year
-        filtered = df[cat_mask & year_mask].copy()
-
+        db_path = self._resolve_db_path(csv_file)
         month_names = [
             "January", "February", "March", "April", "May", "June",
             "July", "August", "September", "October", "November", "December",
         ]
 
-        monthly: dict[int, float] = {m: 0.0 for m in range(1, 13)}
-        if not filtered.empty:
-            for month_num, total in filtered.groupby(filtered["Date"].dt.month)["Amount"].sum().items():
-                monthly[int(month_num)] = float(total)
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT CAST(strftime('%m', expense_date) AS INTEGER) AS month_number,
+                       SUM(amount) AS total_amount
+                FROM expenses
+                WHERE LOWER(category) = ?
+                  AND strftime('%Y', expense_date) = ?
+                GROUP BY strftime('%m', expense_date)
+                ORDER BY month_number
+                """,
+                (category.strip().lower(), f"{year:04d}"),
+            ).fetchall()
+
+        monthly = {month: 0.0 for month in range(1, 13)}
+        for row in rows:
+            monthly[int(row["month_number"])] = float(row["total_amount"])
 
         trend = [
-            {"month": month_names[m - 1], "month_number": m, "amount": monthly[m]}
-            for m in range(1, 13)
+            {"month": month_names[month - 1], "month_number": month, "amount": monthly[month]}
+            for month in range(1, 13)
         ]
 
         yearly_total = sum(monthly.values())
-        peak_month_num = max(monthly, key=lambda m: monthly[m])
+        peak_month_num = max(monthly, key=lambda month: monthly[month])
 
         return self._build_success(
             {
@@ -605,21 +552,13 @@ class ExpenseTools:
                 "yearly_total": yearly_total,
                 "peak_month": month_names[peak_month_num - 1],
                 "peak_amount": monthly[peak_month_num],
-                "csv_path": str(csv_path),
+                "db_path": db_path,
             }
         )
 
 
-# ---------------------------------------------------------------------------
-# Module-level singleton
-# ---------------------------------------------------------------------------
-
 expense_tools = ExpenseTools()
 
-
-# ---------------------------------------------------------------------------
-# Original convenience functions
-# ---------------------------------------------------------------------------
 
 def add_daily_expense(
     date: str,
@@ -629,7 +568,6 @@ def add_daily_expense(
     notes: str = "",
     csv_file: str | None = None,
 ) -> dict[str, Any]:
-    """Add one expense record. See ExpenseTools.add_daily_expense for full docs."""
     return expense_tools.add_daily_expense(
         date=date,
         category=category,
@@ -645,12 +583,7 @@ def monthly_category_expense(
     month: int,
     csv_file: str | None = None,
 ) -> dict[str, Any]:
-    """Get category totals for a given month. See ExpenseTools.monthly_category_expense."""
-    return expense_tools.monthly_category_expense(
-        year=year,
-        month=month,
-        csv_file=csv_file,
-    )
+    return expense_tools.monthly_category_expense(year=year, month=month, csv_file=csv_file)
 
 
 def weekly_category_expense(
@@ -658,25 +591,14 @@ def weekly_category_expense(
     week: int,
     csv_file: str | None = None,
 ) -> dict[str, Any]:
-    """Get category totals for a given ISO week. See ExpenseTools.weekly_category_expense."""
-    return expense_tools.weekly_category_expense(
-        year=year,
-        week=week,
-        csv_file=csv_file,
-    )
+    return expense_tools.weekly_category_expense(year=year, week=week, csv_file=csv_file)
 
-
-# ---------------------------------------------------------------------------
-# New convenience functions
-# ---------------------------------------------------------------------------
 
 def get_expense_summary(
     start_date: str,
     end_date: str,
     csv_file: str | None = None,
 ) -> dict[str, Any]:
-    """Total spending + category breakdown for any custom date range.
-    See ExpenseTools.get_expense_summary for full docs."""
     return expense_tools.get_expense_summary(
         start_date=start_date,
         end_date=end_date,
@@ -693,7 +615,6 @@ def search_expenses(
     max_amount: float | None = None,
     csv_file: str | None = None,
 ) -> dict[str, Any]:
-    """Search expenses with flexible filters. See ExpenseTools.search_expenses for full docs."""
     return expense_tools.search_expenses(
         keyword=keyword,
         category=category,
@@ -709,11 +630,7 @@ def delete_expense(
     row_index: int,
     csv_file: str | None = None,
 ) -> dict[str, Any]:
-    """Delete an expense by its 0-based row index. See ExpenseTools.delete_expense for full docs."""
-    return expense_tools.delete_expense(
-        row_index=row_index,
-        csv_file=csv_file,
-    )
+    return expense_tools.delete_expense(row_index=row_index, csv_file=csv_file)
 
 
 def edit_expense(
@@ -724,7 +641,6 @@ def edit_expense(
     notes: str | None = None,
     csv_file: str | None = None,
 ) -> dict[str, Any]:
-    """Edit one or more fields of an existing expense. See ExpenseTools.edit_expense for full docs."""
     return expense_tools.edit_expense(
         row_index=row_index,
         category=category,
@@ -741,7 +657,6 @@ def top_spending_days(
     top_n: int = 5,
     csv_file: str | None = None,
 ) -> dict[str, Any]:
-    """Find the N days with the highest spend in a date range. See ExpenseTools.top_spending_days."""
     return expense_tools.top_spending_days(
         start_date=start_date,
         end_date=end_date,
@@ -755,43 +670,4 @@ def category_trend(
     year: int,
     csv_file: str | None = None,
 ) -> dict[str, Any]:
-    """Month-by-month spend for one category across a year. See ExpenseTools.category_trend."""
-    return expense_tools.category_trend(
-        category=category,
-        year=year,
-        csv_file=csv_file,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Quick smoke-test
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    # Original tools
-    result = add_daily_expense(
-        date="2024-06-01",
-        category="Food",
-        description="Lunch at cafe",
-        amount=12.50,
-        notes="Had a sandwich and coffee",
-    )
-    print("add_daily_expense →", result)
-
-    res2 = weekly_category_expense(year=2026, week=11)
-    print("weekly_category_expense →", res2)
-
-    # New tools
-    print("\n--- New tools ---")
-
-    summary = get_expense_summary(start_date="2024-01-01", end_date="2024-12-31")
-    print("get_expense_summary →", summary)
-
-    found = search_expenses(keyword="cafe", min_amount=10)
-    print("search_expenses →", found)
-
-    trend = category_trend(category="Food", year=2024)
-    print("category_trend →", trend)
-
-    top = top_spending_days(start_date="2024-01-01", end_date="2024-12-31", top_n=3)
-    print("top_spending_days →", top)
+    return expense_tools.category_trend(category=category, year=year, csv_file=csv_file)

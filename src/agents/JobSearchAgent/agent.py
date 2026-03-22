@@ -28,7 +28,7 @@ root_agent = Agent(
     model = model,
     name="job_search_agent",
     description=(
-        "Searches multi-company jobs from local JSON datasets using "
+        "Searches multi-company jobs from local JSON datasets using"
         "structured filters like location, recency, date range, and keyword."
     ),
     instruction="""

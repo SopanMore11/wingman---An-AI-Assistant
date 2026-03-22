@@ -1,195 +1,123 @@
+from __future__ import annotations
+
 import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-DATASET_DIR = "dataset"
-DEFAULT_DATA_FILE = None
-JOB_FILE_GLOB = "*_jobs.json"
-LEGACY_JOB_FILES = ("jpmc_ai_jobs_india.json",)
-ALLOWED_SORT_FIELDS = {"posted", "title", "primary_location", "id", "company"}
+from src.data.sqlite_store import get_connection, initialize_database
+
+ALLOWED_SORT_FIELDS = {
+    "posted": "posted",
+    "title": "title",
+    "primary_location": "primary_location",
+    "id": "id",
+    "company": "company",
+}
 
 
-def _resolve_dataset_path(dataset_dir: str = DATASET_DIR) -> Path:
-    """Resolve the dataset directory even when the current working directory
-    is not the project root. Try the CWD first, then walk up from this
-    module's location looking for a folder named `dataset`.
-    Returns a Path (may not exist) so callers can raise a clear error.
-    """
-    # 1) direct path (cwd)
-    p = Path(dataset_dir)
-    if p.exists():
-        return p
-
-    # 2) search upward from this file's directory for the dataset folder
-    cur = Path(__file__).resolve().parent
-    for _ in range(8):
-        candidate = cur / dataset_dir
-        if candidate.exists():
-            return candidate
-        cur = cur.parent
-
-    # 3) fallback to provided path (may not exist) so callers can raise
-    return Path(dataset_dir)
+def _db_path() -> str:
+    return str(initialize_database())
 
 
-def _safe_date_from_iso(value: str) -> date | None:
-    if not value:
-        return None
-    try:
-        return date.fromisoformat(value[:10])
-    except ValueError:
-        return None
-
-
-def _infer_company_from_path(path: Path) -> str:
-    stem = path.stem.lower()
-    if "jpmc" in stem:
-        return "JPMC"
-    if "jpmorgan" in stem:
-        return "JPMC"
-    if "oracle" in stem:
-        return "Oracle"
-    if stem.endswith("_jobs"):
-        stem = stem[:-5]
-    return stem
-
-
-def _normalized_job(job: dict[str, Any], source_file: Path | None = None) -> dict[str, Any]:
-    inferred_company = _infer_company_from_path(source_file) if source_file else ""
-    company = str(job.get("company") or inferred_company)
+def _normalize_job(row: Any) -> dict[str, Any]:
     return {
-        "id": str(job.get("id", "")),
-        "title": job.get("title", ""),
-        "primary_location": job.get("primary_location", ""),
-        "work_location": job.get("work_location", ""),
-        "other_locations": job.get("other_locations", []) or [],
-        "workplace_type": job.get("workplace_type", ""),
-        "category": job.get("category", ""),
-        "organization": job.get("organization", ""),
-        "posted": job.get("posted", ""),
-        "apply_url": job.get("apply_url", ""),
-        "scraped_at": job.get("scraped_at", ""),
-        "company": company,
-        "source_file": str(source_file) if source_file else "",
+        "id": str(row["id"] or ""),
+        "title": row["title"] or "",
+        "primary_location": row["primary_location"] or "",
+        "work_location": row["work_location"] or "",
+        "other_locations": json.loads(row["other_locations_json"] or "[]"),
+        "workplace_type": row["workplace_type"] or "",
+        "category": row["category"] or "",
+        "organization": row["organization"] or "",
+        "posted": row["posted"] or "",
+        "apply_url": row["apply_url"] or "",
+        "scraped_at": row["scraped_at"] or "",
+        "company": row["company"] or "",
+        "source_file": row["source_file"] or "",
+        "source_endpoint": row["source_endpoint"] or "",
+        "flex_fields": json.loads(row["flex_fields_json"] or "{}"),
     }
 
 
-def _load_jobs_from_file(path: Path) -> list[dict[str, Any]]:
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    if not isinstance(data, list):
-        raise ValueError(f"Invalid jobs JSON format in {path}: expected a list.")
-
-    jobs = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        # Ignore non-job records (e.g., batch config files with no id/title).
-        if "id" not in item and "title" not in item:
-            continue
-        jobs.append(_normalized_job(item, source_file=path))
-    return jobs
+def _resolve_source_file(data_file: str | None) -> str | None:
+    if not data_file:
+        return None
+    return str(Path(data_file))
 
 
-def _discover_job_files(dataset_path: Path) -> list[Path]:
-    # If the provided path doesn't exist, try to resolve it relative to
-    # the project layout so callers can invoke the module from any CWD.
-    if not dataset_path.exists():
-        dataset_path = _resolve_dataset_path(str(dataset_path))
-
-    if not dataset_path.exists():
-        return []
-
-    files = sorted(dataset_path.glob(JOB_FILE_GLOB))
-    # Prefer legacy files first when present.
-    for legacy_name in LEGACY_JOB_FILES:
-        legacy_path = dataset_path / legacy_name
-        if legacy_path.exists() and legacy_path not in files:
-            files.insert(0, legacy_path)
-    return files
-
-
-def _load_jobs(data_file: str | None = DEFAULT_DATA_FILE, company: str | None = None) -> list[dict[str, Any]]:
-    jobs: list[dict[str, Any]] = []
-
-    if data_file:
-        path = Path(data_file)
-        if not path.exists():
-            raise FileNotFoundError(f"Data file not found: {data_file}")
-        jobs.extend(_load_jobs_from_file(path))
-    else:
-        dataset_path = _resolve_dataset_path(DATASET_DIR)
-        if not dataset_path.exists():
-            raise FileNotFoundError(
-                f"Dataset folder not found: {dataset_path} (looked for '{DATASET_DIR}')"
-            )
-
-        json_files = _discover_job_files(dataset_path)
-        if not json_files:
-            raise FileNotFoundError(
-                f"No job JSON files found in: {dataset_path} (expected pattern: {JOB_FILE_GLOB})"
-            )
-
-        for path in json_files:
-            jobs.extend(_load_jobs_from_file(path))
+def _build_common_filters(
+    *,
+    company: str | None = None,
+    data_file: str | None = None,
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
 
     if company:
-        company_q = company.strip().lower()
-        jobs = [job for job in jobs if company_q in str(job.get("company", "")).lower()]
+        clauses.append("LOWER(company) LIKE ?")
+        params.append(f"%{company.strip().lower()}%")
 
-    return jobs
+    source_file = _resolve_source_file(data_file)
+    if source_file:
+        clauses.append("source_file = ?")
+        params.append(source_file)
 
-
-def _sort_jobs(
-    jobs: list[dict[str, Any]],
-    sort_by: str = "posted",
-    sort_order: str = "desc",
-) -> list[dict[str, Any]]:
-    if sort_by not in ALLOWED_SORT_FIELDS:
-        sort_by = "posted"
-
-    reverse = sort_order.lower() == "desc"
-
-    def sort_key(job: dict[str, Any]) -> tuple[Any, str]:
-        value = job.get(sort_by, "")
-        if sort_by == "posted":
-            posted = _safe_date_from_iso(str(value))
-            return ((posted or date.min), job.get("id", ""))
-        return (str(value).lower(), job.get("id", ""))
-
-    return sorted(jobs, key=sort_key, reverse=reverse)
+    where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""
+    return where_sql, params
 
 
-def _paginate(jobs: list[dict[str, Any]], limit: int = 25, offset: int = 0) -> list[dict[str, Any]]:
-    safe_limit = max(1, min(limit, 200))
-    safe_offset = max(0, offset)
-    return jobs[safe_offset : safe_offset + safe_limit]
+def _safe_sort(sort_by: str = "posted", sort_order: str = "desc") -> tuple[str, str]:
+    column = ALLOWED_SORT_FIELDS.get(sort_by, "posted")
+    direction = "DESC" if sort_order.lower() == "desc" else "ASC"
+    if column == "posted":
+        return f"{column} {direction}, id {direction}", direction
+    return f"{column} {direction}, id ASC", direction
 
 
-def _success_response(
-    jobs: list[dict[str, Any]],
+def _run_job_query(
     *,
     filters: dict[str, Any],
+    where_sql: str,
+    params: list[Any],
     limit: int,
     offset: int,
     sort_by: str,
     sort_order: str,
 ) -> dict[str, Any]:
-    sorted_jobs = _sort_jobs(jobs, sort_by=sort_by, sort_order=sort_order)
-    paged_jobs = _paginate(sorted_jobs, limit=limit, offset=offset)
+    db_path = _db_path()
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+    order_sql, _ = _safe_sort(sort_by, sort_order)
+
+    with get_connection(db_path) as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) AS count FROM jobs{where_sql}",
+            params,
+        ).fetchone()["count"]
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM jobs
+            {where_sql}
+            ORDER BY {order_sql}
+            LIMIT ? OFFSET ?
+            """,
+            params + [safe_limit, safe_offset],
+        ).fetchall()
+
     return {
         "status": "success",
         "filters": filters,
-        "sort": {"by": sort_by, "order": sort_order.lower()},
+        "sort": {"by": sort_by if sort_by in ALLOWED_SORT_FIELDS else "posted", "order": sort_order.lower()},
         "pagination": {
-            "limit": max(1, min(limit, 200)),
-            "offset": max(0, offset),
-            "returned": len(paged_jobs),
-            "total": len(sorted_jobs),
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "returned": len(rows),
+            "total": int(total),
         },
-        "jobs": paged_jobs,
+        "jobs": [_normalize_job(row) for row in rows],
+        "db_path": db_path,
     }
 
 
@@ -198,7 +126,7 @@ def _error_response(message: str) -> dict[str, Any]:
 
 
 def get_all_jobs(
-    data_file: str | None = DEFAULT_DATA_FILE,
+    data_file: str | None = None,
     company: str | None = None,
     limit: int = 25,
     offset: int = 0,
@@ -206,22 +134,23 @@ def get_all_jobs(
     sort_order: str = "desc",
 ) -> dict[str, Any]:
     try:
-        jobs = _load_jobs(data_file, company=company)
-        return _success_response(
-            jobs,
+        where_sql, params = _build_common_filters(company=company, data_file=data_file)
+        return _run_job_query(
             filters={"company": company, "data_file": data_file},
+            where_sql=where_sql,
+            params=params,
             limit=limit,
             offset=offset,
             sort_by=sort_by,
             sort_order=sort_order,
         )
-    except Exception as e:
-        return _error_response(str(e))
+    except Exception as exc:
+        return _error_response(str(exc))
 
 
 def get_jobs_by_location(
     location: str,
-    data_file: str | None = DEFAULT_DATA_FILE,
+    data_file: str | None = None,
     company: str | None = None,
     limit: int = 25,
     offset: int = 0,
@@ -230,35 +159,35 @@ def get_jobs_by_location(
 ) -> dict[str, Any]:
     try:
         location_query = (location or "").strip().lower()
-        jobs = _load_jobs(data_file, company=company)
+        where_sql, params = _build_common_filters(company=company, data_file=data_file)
+        location_clause = """
+            (
+                LOWER(primary_location) LIKE ?
+                OR LOWER(work_location) LIKE ?
+                OR LOWER(other_locations_json) LIKE ?
+            )
+        """
+        where_sql += (" AND " if where_sql else " WHERE ") + location_clause
+        pattern = f"%{location_query}%"
+        params.extend([pattern, pattern, pattern])
 
-        filtered = []
-        for job in jobs:
-            searchable_locations = [
-                str(job.get("primary_location", "")),
-                str(job.get("work_location", "")),
-                *[str(x) for x in job.get("other_locations", [])],
-            ]
-            haystack = " | ".join(searchable_locations).lower()
-            if location_query and location_query in haystack:
-                filtered.append(job)
-
-        return _success_response(
-            filtered,
+        return _run_job_query(
             filters={"location": location, "company": company, "data_file": data_file},
+            where_sql=where_sql,
+            params=params,
             limit=limit,
             offset=offset,
             sort_by=sort_by,
             sort_order=sort_order,
         )
-    except Exception as e:
-        return _error_response(str(e))
+    except Exception as exc:
+        return _error_response(str(exc))
 
 
 def get_recent_jobs(
     days: int = 7,
     reference_date: str | None = None,
-    data_file: str | None = DEFAULT_DATA_FILE,
+    data_file: str | None = None,
     company: str | None = None,
     limit: int = 25,
     offset: int = 0,
@@ -266,39 +195,36 @@ def get_recent_jobs(
     sort_order: str = "desc",
 ) -> dict[str, Any]:
     try:
-        jobs = _load_jobs(data_file, company=company)
         safe_days = max(1, days)
-
         ref = date.fromisoformat(reference_date) if reference_date else datetime.now().date()
-        cutoff = ref - timedelta(days=safe_days)
+        cutoff = (ref - timedelta(days=safe_days)).isoformat()
 
-        filtered = []
-        for job in jobs:
-            posted = _safe_date_from_iso(str(job.get("posted", "")))
-            if posted is not None and posted >= cutoff:
-                filtered.append(job)
+        where_sql, params = _build_common_filters(company=company, data_file=data_file)
+        where_sql += (" AND " if where_sql else " WHERE ") + "posted >= ?"
+        params.append(cutoff)
 
-        return _success_response(
-            filtered,
+        return _run_job_query(
             filters={
                 "days": safe_days,
                 "reference_date": ref.isoformat(),
                 "company": company,
                 "data_file": data_file,
             },
+            where_sql=where_sql,
+            params=params,
             limit=limit,
             offset=offset,
             sort_by=sort_by,
             sort_order=sort_order,
         )
-    except Exception as e:
-        return _error_response(str(e))
+    except Exception as exc:
+        return _error_response(str(exc))
 
 
 def get_jobs_by_posted_date_range(
     start_date: str,
     end_date: str,
-    data_file: str | None = DEFAULT_DATA_FILE,
+    data_file: str | None = None,
     company: str | None = None,
     limit: int = 25,
     offset: int = 0,
@@ -308,37 +234,34 @@ def get_jobs_by_posted_date_range(
     try:
         start = date.fromisoformat(start_date)
         end = date.fromisoformat(end_date)
-
         if end < start:
             return _error_response("end_date must be greater than or equal to start_date")
 
-        jobs = _load_jobs(data_file, company=company)
-        filtered = []
-        for job in jobs:
-            posted = _safe_date_from_iso(str(job.get("posted", "")))
-            if posted is not None and start <= posted <= end:
-                filtered.append(job)
+        where_sql, params = _build_common_filters(company=company, data_file=data_file)
+        where_sql += (" AND " if where_sql else " WHERE ") + "posted BETWEEN ? AND ?"
+        params.extend([start.isoformat(), end.isoformat()])
 
-        return _success_response(
-            filtered,
+        return _run_job_query(
             filters={
                 "start_date": start_date,
                 "end_date": end_date,
                 "company": company,
                 "data_file": data_file,
             },
+            where_sql=where_sql,
+            params=params,
             limit=limit,
             offset=offset,
             sort_by=sort_by,
             sort_order=sort_order,
         )
-    except Exception as e:
-        return _error_response(str(e))
+    except Exception as exc:
+        return _error_response(str(exc))
 
 
 def get_jobs_by_keyword(
     keyword: str,
-    data_file: str | None = DEFAULT_DATA_FILE,
+    data_file: str | None = None,
     company: str | None = None,
     limit: int = 25,
     offset: int = 0,
@@ -347,32 +270,30 @@ def get_jobs_by_keyword(
 ) -> dict[str, Any]:
     try:
         query = (keyword or "").strip().lower()
-        jobs = _load_jobs(data_file, company=company)
+        where_sql, params = _build_common_filters(company=company, data_file=data_file)
+        where_sql += (" AND " if where_sql else " WHERE ") + """
+            (
+                LOWER(title) LIKE ?
+                OR LOWER(category) LIKE ?
+                OR LOWER(organization) LIKE ?
+                OR LOWER(workplace_type) LIKE ?
+                OR LOWER(company) LIKE ?
+            )
+        """
+        pattern = f"%{query}%"
+        params.extend([pattern, pattern, pattern, pattern, pattern])
 
-        filtered = []
-        for job in jobs:
-            haystack = " | ".join(
-                [
-                    str(job.get("title", "")),
-                    str(job.get("category", "")),
-                    str(job.get("organization", "")),
-                    str(job.get("workplace_type", "")),
-                    str(job.get("company", "")),
-                ]
-            ).lower()
-            if query and query in haystack:
-                filtered.append(job)
-
-        return _success_response(
-            filtered,
+        return _run_job_query(
             filters={"keyword": keyword, "company": company, "data_file": data_file},
+            where_sql=where_sql,
+            params=params,
             limit=limit,
             offset=offset,
             sort_by=sort_by,
             sort_order=sort_order,
         )
-    except Exception as e:
-        return _error_response(str(e))
+    except Exception as exc:
+        return _error_response(str(exc))
 
 
 def search_jobs(
@@ -384,74 +305,74 @@ def search_jobs(
     end_date: str | None = None,
     workplace_type: str | None = None,
     category: str | None = None,
-    data_file: str | None = DEFAULT_DATA_FILE,
+    data_file: str | None = None,
     limit: int = 25,
     offset: int = 0,
     sort_by: str = "posted",
     sort_order: str = "desc",
 ) -> dict[str, Any]:
-    """Combined filter tool for agent usage. All filters are AND-ed when provided."""
     try:
-        jobs = _load_jobs(data_file, company=company)
+        where_sql, params = _build_common_filters(company=company, data_file=data_file)
 
-        location_q = (location or "").strip().lower()
-        keyword_q = (keyword or "").strip().lower()
-        workplace_q = (workplace_type or "").strip().lower()
-        category_q = (category or "").strip().lower()
+        if start_date:
+            start = date.fromisoformat(start_date)
+        else:
+            start = None
 
-        start = date.fromisoformat(start_date) if start_date else None
-        end = date.fromisoformat(end_date) if end_date else None
+        if end_date:
+            end = date.fromisoformat(end_date)
+        else:
+            end = None
+
         if start and end and end < start:
             return _error_response("end_date must be greater than or equal to start_date")
 
-        ref = datetime.now().date()
-        cutoff = ref - timedelta(days=max(1, days)) if days is not None else None
+        if location:
+            pattern = f"%{location.strip().lower()}%"
+            where_sql += (" AND " if where_sql else " WHERE ") + """
+                (
+                    LOWER(primary_location) LIKE ?
+                    OR LOWER(work_location) LIKE ?
+                    OR LOWER(other_locations_json) LIKE ?
+                )
+            """
+            params.extend([pattern, pattern, pattern])
 
-        filtered = []
-        for job in jobs:
-            posted = _safe_date_from_iso(str(job.get("posted", "")))
+        if keyword:
+            pattern = f"%{keyword.strip().lower()}%"
+            where_sql += (" AND " if where_sql else " WHERE ") + """
+                (
+                    LOWER(title) LIKE ?
+                    OR LOWER(category) LIKE ?
+                    OR LOWER(organization) LIKE ?
+                    OR LOWER(workplace_type) LIKE ?
+                    OR LOWER(company) LIKE ?
+                )
+            """
+            params.extend([pattern, pattern, pattern, pattern, pattern])
 
-            if location_q:
-                searchable_locations = [
-                    str(job.get("primary_location", "")),
-                    str(job.get("work_location", "")),
-                    *[str(x) for x in job.get("other_locations", [])],
-                ]
-                if location_q not in " | ".join(searchable_locations).lower():
-                    continue
+        if workplace_type:
+            where_sql += (" AND " if where_sql else " WHERE ") + "LOWER(workplace_type) LIKE ?"
+            params.append(f"%{workplace_type.strip().lower()}%")
 
-            if keyword_q:
-                keyword_haystack = " | ".join(
-                    [
-                        str(job.get("title", "")),
-                        str(job.get("category", "")),
-                        str(job.get("organization", "")),
-                        str(job.get("workplace_type", "")),
-                        str(job.get("company", "")),
-                    ]
-                ).lower()
-                if keyword_q not in keyword_haystack:
-                    continue
+        if category:
+            where_sql += (" AND " if where_sql else " WHERE ") + "LOWER(category) LIKE ?"
+            params.append(f"%{category.strip().lower()}%")
 
-            if workplace_q and workplace_q not in str(job.get("workplace_type", "")).lower():
-                continue
+        if days is not None:
+            cutoff = (datetime.now().date() - timedelta(days=max(1, days))).isoformat()
+            where_sql += (" AND " if where_sql else " WHERE ") + "posted >= ?"
+            params.append(cutoff)
 
-            if category_q and category_q not in str(job.get("category", "")).lower():
-                continue
+        if start is not None:
+            where_sql += (" AND " if where_sql else " WHERE ") + "posted >= ?"
+            params.append(start.isoformat())
 
-            if cutoff is not None and (posted is None or posted < cutoff):
-                continue
+        if end is not None:
+            where_sql += (" AND " if where_sql else " WHERE ") + "posted <= ?"
+            params.append(end.isoformat())
 
-            if start is not None and (posted is None or posted < start):
-                continue
-
-            if end is not None and (posted is None or posted > end):
-                continue
-
-            filtered.append(job)
-
-        return _success_response(
-            filtered,
+        return _run_job_query(
             filters={
                 "location": location,
                 "keyword": keyword,
@@ -463,83 +384,77 @@ def search_jobs(
                 "category": category,
                 "data_file": data_file,
             },
+            where_sql=where_sql,
+            params=params,
             limit=limit,
             offset=offset,
             sort_by=sort_by,
             sort_order=sort_order,
         )
-    except Exception as e:
-        return _error_response(str(e))
+    except Exception as exc:
+        return _error_response(str(exc))
 
 
-def get_job_filter_metadata(data_file: str | None = DEFAULT_DATA_FILE) -> dict[str, Any]:
-    """Returns available filter values discovered in dataset(s)."""
+def get_job_filter_metadata(data_file: str | None = None) -> dict[str, Any]:
     try:
-        jobs = _load_jobs(data_file)
+        db_path = _db_path()
+        where_sql, params = _build_common_filters(data_file=data_file)
 
-        locations = sorted(
-            {
-                str(job.get("primary_location", "")).strip()
-                for job in jobs
-                if str(job.get("primary_location", "")).strip()
-            }
-        )
-        workplace_types = sorted(
-            {
-                str(job.get("workplace_type", "")).strip()
-                for job in jobs
-                if str(job.get("workplace_type", "")).strip()
-            }
-        )
-        categories = sorted(
-            {
-                str(job.get("category", "")).strip()
-                for job in jobs
-                if str(job.get("category", "")).strip()
-            }
-        )
-        companies = sorted(
-            {
-                str(job.get("company", "")).strip()
-                for job in jobs
-                if str(job.get("company", "")).strip()
-            }
-        )
+        with get_connection(db_path) as conn:
+            total_jobs = conn.execute(
+                f"SELECT COUNT(*) AS count FROM jobs{where_sql}",
+                params,
+            ).fetchone()["count"]
+            min_max = conn.execute(
+                f"SELECT MIN(posted) AS min_posted, MAX(posted) AS max_posted FROM jobs{where_sql}",
+                params,
+            ).fetchone()
 
-        posted_dates = [_safe_date_from_iso(str(job.get("posted", ""))) for job in jobs]
-        posted_dates = [d for d in posted_dates if d is not None]
+            def distinct_values(column: str) -> list[str]:
+                rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT {column} AS value
+                    FROM jobs
+                    {where_sql}
+                    AND {column} != ''
+                    """ if where_sql else f"""
+                    SELECT DISTINCT {column} AS value
+                    FROM jobs
+                    WHERE {column} != ''
+                    """,
+                    params,
+                ).fetchall()
+                return sorted(str(row["value"]).strip() for row in rows if str(row["value"]).strip())
+
+            locations = distinct_values("primary_location")
+            workplace_types = distinct_values("workplace_type")
+            categories = distinct_values("category")
+            companies = distinct_values("company")
 
         return {
             "status": "success",
             "counts": {
-                "jobs": len(jobs),
+                "jobs": int(total_jobs),
                 "locations": len(locations),
                 "workplace_types": len(workplace_types),
                 "categories": len(categories),
                 "companies": len(companies),
             },
             "date_range": {
-                "min_posted": min(posted_dates).isoformat() if posted_dates else None,
-                "max_posted": max(posted_dates).isoformat() if posted_dates else None,
+                "min_posted": min_max["min_posted"],
+                "max_posted": min_max["max_posted"],
             },
             "companies": companies,
             "locations": locations,
             "workplace_types": workplace_types,
             "categories": categories,
+            "db_path": db_path,
         }
-    except Exception as e:
-        return _error_response(str(e))
+    except Exception as exc:
+        return _error_response(str(exc))
 
 
 def extract_job_details_from_url(url: str, timeout_seconds: int = 20) -> dict[str, Any]:
-    """
-    Extract job details from a job page URL using HTML parsing.
-    Designed for pages containing:
-    - h1.job-details__title
-    - div.job-details__subtitle
-    - .job-meta__item blocks
-    - div.job-details__section blocks
-    """
     try:
         try:
             import requests
@@ -575,13 +490,11 @@ def extract_job_details_from_url(url: str, timeout_seconds: int = 20) -> dict[st
             header = section.find("h2")
             content = section.find("div", class_="job-details__description-content")
             if header and content:
-                job[header.get_text(strip=True)] = content.get_text(
-                    separator="\n", strip=True
-                )
+                job[header.get_text(strip=True)] = content.get_text(separator="\n", strip=True)
 
         return {
             "status": "success",
             "job": job,
         }
-    except Exception as e:
-        return _error_response(str(e))
+    except Exception as exc:
+        return _error_response(str(exc))
