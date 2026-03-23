@@ -64,6 +64,28 @@ def initialize_database(db_file: str | None = None) -> Path:
     return db_path
 
 
+def upsert_jobs_from_json_files(
+    json_files: list[str | Path],
+    db_file: str | None = None,
+) -> dict[str, int]:
+    db_path = resolve_db_path(db_file)
+    parsed_rows = _load_job_rows_from_json_files([Path(path) for path in json_files])
+    with get_connection(str(db_path)) as conn:
+        _create_schema(conn)
+        if parsed_rows:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO jobs (
+                    id, title, primary_location, work_location, other_locations_json,
+                    workplace_type, category, organization, posted, apply_url,
+                    scraped_at, company, source_file, source_endpoint, flex_fields_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                parsed_rows,
+            )
+    return {"jobs_upserted": len(parsed_rows)}
+
+
 def _create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -166,6 +188,34 @@ def _bootstrap_jobs(conn: sqlite3.Connection) -> None:
         if legacy_path.exists() and legacy_path not in json_files:
             json_files.insert(0, legacy_path)
 
+    rows = _load_job_rows_from_json_files(json_files)
+    if rows:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO jobs (
+                id, title, primary_location, work_location, other_locations_json,
+                workplace_type, category, organization, posted, apply_url,
+                scraped_at, company, source_file, source_endpoint, flex_fields_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+
+def _infer_company_from_path(path: Path) -> str:
+    stem = path.stem.lower()
+    if "jpmc" in stem or "jpmorgan" in stem:
+        return "JPMC"
+    if "oracle" in stem:
+        return "Oracle"
+    if stem.endswith("_jobs"):
+        stem = stem[:-5]
+    return stem
+
+
+def _load_job_rows_from_json_files(
+    json_files: list[Path],
+) -> list[tuple[str, str, str, str, str, str, str, str, str, str, str, str, str, str, str]]:
     rows: list[tuple[str, str, str, str, str, str, str, str, str, str, str, str, str, str, str]] = []
     for path in json_files:
         try:
@@ -205,25 +255,4 @@ def _bootstrap_jobs(conn: sqlite3.Connection) -> None:
                 )
             )
 
-    if rows:
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO jobs (
-                id, title, primary_location, work_location, other_locations_json,
-                workplace_type, category, organization, posted, apply_url,
-                scraped_at, company, source_file, source_endpoint, flex_fields_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
-
-
-def _infer_company_from_path(path: Path) -> str:
-    stem = path.stem.lower()
-    if "jpmc" in stem or "jpmorgan" in stem:
-        return "JPMC"
-    if "oracle" in stem:
-        return "Oracle"
-    if stem.endswith("_jobs"):
-        stem = stem[:-5]
-    return stem
+    return rows

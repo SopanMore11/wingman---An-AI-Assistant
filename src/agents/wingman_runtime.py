@@ -3,16 +3,17 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from src.agents.JobSearchAgent.agent import root_agent as job_agent
-from src.agents.calenderAgent.agent import root_agent as calendar_agent
-from src.agents.expenseManagerAgent.agent import root_agent as expense_agent
-from src.agents.calenderAgent.tools import get_current_datetime
+from src.agents.job_search_agent.agent import root_agent as job_agent
+from src.agents.calendar_agent.agent import root_agent as calendar_agent
+from src.agents.expense_manager_agent.agent import root_agent as expense_agent
+from src.agents.calendar_agent.tools import get_current_datetime
 from src.services.llm_services import LLMServices
 import datetime
 
 APP_NAME = "wingman_orchestrator"
 
-groq_model = LLMServices().get_model(provider="groq")
+# Initialize orchestrator model using centralized LLM service
+groq_model = LLMServices().get_groq_model()
 
 orchestrator = LlmAgent(
     name=APP_NAME,

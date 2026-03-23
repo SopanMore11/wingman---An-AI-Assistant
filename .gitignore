@@ -3,8 +3,15 @@ __pycache__/
 *.py[codz]
 *$py.class
 
-# C extensions
-*.so
+# Environment variables and credentials
+.env
+.env.local
+.env.*.local
+.secrets/
+*.key
+*.pem
+
+# Authentication and credentials
 token.json
 credentials.json
 token.pickle

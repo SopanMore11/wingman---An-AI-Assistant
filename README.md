@@ -37,9 +37,9 @@ The current application entrypoint is [`main.py`](/d:/My%20Programs/Python/Proje
 - [`main.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/main.py): starts the Telegram polling app
 - [`src/agents/wingman_runtime.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/wingman_runtime.py): orchestrator runtime and session handling
 - [`src/integrations/telegram.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/integrations/telegram.py): Telegram bot integration
-- [`src/agents/calenderAgent/agent.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/calenderAgent/agent.py): calendar agent
-- [`src/agents/expenseManagerAgent/agent.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/expenseManagerAgent/agent.py): expense agent
-- [`src/agents/JobSearchAgent/agent.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/JobSearchAgent/agent.py): job search agent
+- [`src/agents/calendar_agent/agent.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/calendar_agent/agent.py): calendar agent
+- [`src/agents/expense_manager_agent/agent.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/expense_manager_agent/agent.py): expense agent
+- [`src/agents/job_search_agent/agent.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/job_search_agent/agent.py): job search agent
 - [`src/google_authenticator.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/google_authenticator.py): Google Calendar OAuth flow
 - [`dataset/`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/dataset): local SQLite database plus legacy source files used for bootstrapping
 

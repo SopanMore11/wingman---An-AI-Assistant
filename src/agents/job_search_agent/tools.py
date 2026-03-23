@@ -5,7 +5,13 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.data.sqlite_store import get_connection, initialize_database
+from src.agents.job_search_agent.crawlerEngine import (
+    COMPANY_KEY_ALIASES,
+    canonical_company_key,
+    parse_keywords,
+    run_crawler,
+)
+from src.data.sqlite_store import get_connection, initialize_database, upsert_jobs_from_json_files
 
 ALLOWED_SORT_FIELDS = {
     "posted": "posted",
@@ -14,6 +20,7 @@ ALLOWED_SORT_FIELDS = {
     "id": "id",
     "company": "company",
 }
+COMPANY_BATCH_FILE = "dataset/companies_batch.json"
 
 
 def _db_path() -> str:
@@ -123,6 +130,76 @@ def _run_job_query(
 
 def _error_response(message: str) -> dict[str, Any]:
     return {"status": "error", "message": message}
+
+
+def _resolve_company_config(company: str) -> dict[str, Any]:
+    batch_path = Path(COMPANY_BATCH_FILE)
+    if not batch_path.exists():
+        raise FileNotFoundError(f"Company batch file not found: {COMPANY_BATCH_FILE}")
+
+    with batch_path.open("r", encoding="utf-8") as file:
+        configs = json.load(file)
+
+    if not isinstance(configs, list):
+        raise ValueError("Company batch file must contain a list of company configs.")
+
+    company_query = (company or "").strip().lower()
+    if not company_query:
+        raise ValueError("company is required")
+
+    canonical_query = COMPANY_KEY_ALIASES.get(company_query, canonical_company_key(company_query))
+
+    for config in configs:
+        if not isinstance(config, dict):
+            continue
+        config_company = str(config.get("company", "") or "")
+        config_key = canonical_company_key(config_company)
+        if company_query in config_company.lower() or canonical_query == config_key:
+            return config
+
+    raise ValueError(f"Unsupported company '{company}'. Add it to {COMPANY_BATCH_FILE} first.")
+
+
+def refresh_company_jobs(
+    company: str,
+    keywords: str | None = None,
+    output_dir: str = "dataset",
+) -> dict[str, Any]:
+    """Crawl the latest listings for a supported company and sync them into SQLite."""
+    try:
+        config = _resolve_company_config(company)
+        crawl_result = run_crawler(
+            company_name=str(config["company"]),
+            endpoint=str(config["endpoint"]),
+            keywords=parse_keywords(keywords if keywords is not None else config.get("keywords")),
+            site_number=config.get("site_number"),
+            location_id=config.get("location_id"),
+            category_id=config.get("category_id"),
+            output_dir=output_dir,
+        )
+
+        if crawl_result.get("status") != "success":
+            return crawl_result
+
+        sync_result = upsert_jobs_from_json_files([str(crawl_result["output_json"])])
+        db_path = _db_path()
+        with get_connection(db_path) as conn:
+            total_jobs = conn.execute(
+                "SELECT COUNT(*) AS count FROM jobs WHERE LOWER(company) LIKE ?",
+                (f"%{str(config['company']).lower()}%",),
+            ).fetchone()["count"]
+
+        return {
+            "status": "success",
+            "company": config["company"],
+            "message": f"Refreshed latest listings for {config['company']} and synced them to SQLite.",
+            "crawler": crawl_result,
+            "sync": sync_result,
+            "company_job_count": int(total_jobs),
+            "db_path": db_path,
+        }
+    except Exception as exc:
+        return _error_response(str(exc))
 
 
 def get_all_jobs(

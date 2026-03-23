@@ -1,9 +1,8 @@
 import os
 import datetime
 from dotenv import load_dotenv
-from google.adk.agents.llm_agent import Agent
+from src.agents.base_agent import BaseAgent
 from src.google_authenticator import authenticate_google_calendar
-from google.adk.models import LiteLlm
 from .tools import (
     get_current_datetime,
     get_schedule_for_date,
@@ -23,29 +22,14 @@ os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 service = authenticate_google_calendar()
 
 
-# # --- Manual Test ---
-# if __name__ == "__main__":
-#     print("Current IST time:", get_current_datetime())
-    
-#     # Note: Removed the 'Z' so it stays at 10:00 IST
-#     result = create_calendar_event(
-#         summary="Go to temple",
-#         description="Go to temple with family",
-#         start_datetime="2026-02-15T10:00:00", 
-#         end_datetime="2026-02-15T11:00:00",
-#     )
-#     print(result)
+class CalendarAgent(BaseAgent):
+    """Agent for managing Google Calendar events and schedules."""
 
-model = LiteLlm(
-    model="groq/moonshotai/kimi-k2-instruct-0905",  # use "groq/<groq-model-name>",
-)
-# model = "gemini-3-flash-preview"
-
-root_agent = Agent(
-    model=model,
-    name='root_agent',
-    description="Manages and describes the user's calendar schedule in India Standard Time.",
-    instruction="""
+    def __init__(self):
+        super().__init__(
+            name="root_agent",
+            description="Manages and describes the user's calendar schedule in India Standard Time.",
+            instruction="""
         Use 'get_current_datetime' to orient yourself to the user's current time.
         1. When asked about a schedule, always use 'get_schedule_for_date'. 
         2. Ensure the date is strictly in YYYY-MM-DD format.
@@ -56,15 +40,22 @@ root_agent = Agent(
         4. IMPORTANT: All times are in India Standard Time (IST). Do not append 'Z' to timestamps.
         6. Summarize the day's flow (e.g., 'You have a free morning before your 2 PM meeting').
     """,
-    tools=[
-        get_current_datetime,
-        get_schedule_for_date,
-        create_calendar_event,
-        delete_calendar_event,
-        update_calendar_event,
-        get_free_slots_for_date,
-    ],
-)
+        )
+
+    def _get_tools(self):
+        """Return the list of tools available to this agent."""
+        return [
+            get_current_datetime,
+            get_schedule_for_date,
+            create_calendar_event,
+            delete_calendar_event,
+            update_calendar_event,
+            get_free_slots_for_date,
+        ]
+
+
+# Export the agent instance
+root_agent = CalendarAgent().agent
 
 if __name__ == "__main__":
     # When run directly, start the agent. Importing this module won't auto-start it.
