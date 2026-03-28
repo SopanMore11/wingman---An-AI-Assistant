@@ -3,10 +3,9 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from src.agents.job_search_agent.agent import root_agent as job_agent
-from src.agents.calendar_agent.agent import root_agent as calendar_agent
-from src.agents.expense_manager_agent.agent import root_agent as expense_agent
-from src.agents.calendar_agent.tools import get_current_datetime
+from src.agents.jobSearcher import root_agent as job_agent
+from src.agents.calenderManager import root_agent as calendar_agent
+from src.agents.expenseManager import root_agent as expense_agent
 from src.services.llm_services import LLMServices
 import datetime
 
@@ -21,7 +20,8 @@ orchestrator = LlmAgent(
     instruction=(
         "Route each user request to the best sub-agent for job search, calendar "
         "management, or expense tracking. Prefer delegating to exactly one "
-        "sub-agent unless the user explicitly combines tasks."
+        "sub-agent unless the user explicitly combines tasks like calnder and expense management in a single query. If the user query is ambiguous, ask a clarifying question to determine the correct sub-agent."
+        "Today's date is " + datetime.datetime.now().strftime("%Y-%m-%d") + "."
     ),
     description=(
         "Main orchestrator agent for Wingman that delegates user queries to the "

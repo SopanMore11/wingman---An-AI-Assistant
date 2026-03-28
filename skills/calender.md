@@ -1,14 +1,3 @@
-## Calendar Agent
-
-- Agent file: `src/agents/calendar_agent/agent.py`
-- Tools file: `src/agents/calendar_agent/tools.py`
-- Auth helper: `src/google_authenticator.py`
-- Imported in orchestrator: `src/agents/wingman_runtime.py`
-- Agent variable name: `root_agent`
-- Agent description: `Manages and describes the user's calendar schedule in India Standard Time.`
-- Model: `groq/moonshotai/kimi-k2-instruct-0905` via `LiteLlm`
-- Calendar service initialization happens at import time through `authenticate_google_calendar()`
-
 ## Agent Instruction
 
 ```text
@@ -26,34 +15,11 @@ Use 'get_current_datetime' to orient yourself to the user's current time.
 ## Registered Tools
 
 ### `get_current_datetime`
-
-- Path: `src/agents/calendar_agent/tools.py`
-- Purpose: returns the current local datetime string used by the agent for orientation.
-
 ### `get_schedule_for_date`
-
-- Path: `src/agents/calendar_agent/tools.py`
-- Purpose: lists all Google Calendar events for one `YYYY-MM-DD` date in IST.
-
 ### `create_calendar_event`
-
-- Path: `src/agents/calendar_agent/tools.py`
-- Purpose: creates an event with `summary`, `description`, `start_datetime`, `end_datetime`, and optional `timezone`.
-
 ### `delete_calendar_event`
-
-- Path: `src/agents/calendar_agent/tools.py`
-- Purpose: deletes an event by `event_id`.
-
 ### `update_calendar_event`
-
-- Path: `src/agents/calendar_agent/tools.py`
-- Purpose: updates an existing event by `event_id` with optional new summary, description, start, or end.
-
 ### `get_free_slots_for_date`
-
-- Path: `src/agents/calendar_agent/tools.py`
-- Purpose: returns free slots within a configurable day window for one date.
 
 ## Tool Behavior Notes
 

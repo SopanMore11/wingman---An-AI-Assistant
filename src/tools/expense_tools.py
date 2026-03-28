@@ -555,8 +555,7 @@ class ExpenseTools:
                 "db_path": db_path,
             }
         )
-
-
+    
 expense_tools = ExpenseTools()
 
 
