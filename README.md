@@ -43,6 +43,16 @@ The current application entrypoint is [`main.py`](/d:/My%20Programs/Python/Proje
 - [`src/google_authenticator.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/google_authenticator.py): Google Calendar OAuth flow
 - [`dataset/`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/dataset): local SQLite database plus legacy source files used for bootstrapping
 
+## Agent Skills Documentation
+
+Each agent has detailed instructions and tool behavior documentation:
+
+- [`skills/calender.md`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/skills/calender.md): Calendar agent instructions, registered tools, and behavior notes
+- [`skills/expense.md`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/skills/expense.md): Expense manager agent instructions, registered tools, and behavior notes
+- [`skills/job_search.md`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/skills/job_search.md): Job search agent instructions, registered tools, and behavior notes
+
+These documents provide comprehensive information about tool usage, date formats, validation rules, and response structures for each agent.
+
 ## Requirements
 
 - Python `3.12+`
