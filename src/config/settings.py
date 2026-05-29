@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Define provider types
-Provider = Literal["groq", "google"]
+Provider = Literal["groq", "google", "litai"]
 
 # Repository root path
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -48,10 +48,12 @@ class LLMConfig:
     """LLM (Large Language Model) configuration."""
 
     provider: Provider = "groq"
-    groq_model: str = "groq/moonshotai/kimi-k2-instruct-0905"
+    groq_model: str = "groq/qwen/qwen3-32b"
     google_model: str = "gemini-3-flash-preview"
+    litai_model: str = "lightning-ai/gemma-4-31B-it"
     groq_api_key_env: str = "GROQ_API_KEY"
     google_api_key_env: str = "GOOGLE_API_KEY"
+    lightning_api_key_env: str = "LIGHTNING_API_KEY"
 
     def get_groq_api_key(self) -> str:
         """Get Groq API key from environment."""
@@ -65,6 +67,13 @@ class LLMConfig:
         key = os.getenv(self.google_api_key_env)
         if not key:
             raise ValueError(f"Missing environment variable: {self.google_api_key_env}")
+        return key
+
+    def get_lightning_api_key(self) -> str:
+        """Get Lightning API key from environment."""
+        key = os.getenv(self.lightning_api_key_env)
+        if not key:
+            raise ValueError(f"Missing environment variable: {self.lightning_api_key_env}")
         return key
 
 

@@ -34,14 +34,33 @@ The current application entrypoint is [`main.py`](/d:/My%20Programs/Python/Proje
 
 ## Architecture
 
-- [`main.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/main.py): starts the Telegram polling app
-- [`src/agents/wingman_runtime.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/wingman_runtime.py): orchestrator runtime and session handling
-- [`src/integrations/telegram.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/integrations/telegram.py): Telegram bot integration
-- [`src/agents/calendar_agent/agent.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/calendar_agent/agent.py): calendar agent
-- [`src/agents/expense_manager_agent/agent.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/expense_manager_agent/agent.py): expense agent
-- [`src/agents/job_search_agent/agent.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/job_search_agent/agent.py): job search agent
-- [`src/google_authenticator.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/google_authenticator.py): Google Calendar OAuth flow
-- [`dataset/`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/dataset): local SQLite database plus legacy source files used for bootstrapping
+### Core Components
+
+- [`main.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/main.py): Telegram bot entry point and polling loop
+- [`src/agents/wingman_runtime.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/wingman_runtime.py): Orchestrator runtime for routing messages to agents
+- [`src/agents/base_agent.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/base_agent.py): Base class for all agent implementations
+
+### Agent Implementations
+
+- [`src/agents/calenderManager.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/calenderManager.py): Calendar management agent
+- [`src/agents/expenseManager.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/expenseManager.py): Expense tracking agent
+- [`src/agents/jobSearcher.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/agents/jobSearcher.py): Job search agent
+
+### Tools & Utilities
+
+- [`src/tools/calender_tools.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/tools/calender_tools.py): Calendar API integration tools
+- [`src/tools/expense_tools.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/tools/expense_tools.py): Expense database management tools
+- [`src/tools/job_search_tools.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/tools/job_search_tools.py): Job search and filtering tools
+- [`src/tools/crawlerEngine.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/tools/crawlerEngine.py): Web crawler for job listings
+- [`src/google_authenticator.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/google_authenticator.py): Google Calendar OAuth authentication
+
+### Infrastructure
+
+- [`src/integrations/telegram.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/integrations/telegram.py): Telegram bot client and message handling
+- [`src/config/settings.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/config/settings.py): Configuration management and environment variables
+- [`src/data/sqlite_store.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/data/sqlite_store.py): SQLite database connection and management
+- [`src/services/llm_services.py`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/src/services/llm_services.py): LLM integration (Groq API)
+- [`dataset/`](/d:/My%20Programs/Python/Projects/wingman---An-AI-Assistant/dataset): Local SQLite database and source data files for bootstrapping
 
 ## Agent Skills Documentation
 
