@@ -8,6 +8,7 @@ from google.adk.agents.llm_agent import Agent
 from google.adk.models import LiteLlm
 
 from src.config import Settings
+from src.services.llm_services import LLMServices
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class BaseAgent(ABC):
         name: str,
         description: str,
         instruction: str,
-        model: LiteLlm | None = None,
+        model: LiteLlm | str | None = None,
         settings: Settings | None = None,
     ):
         """
@@ -51,12 +52,14 @@ class BaseAgent(ABC):
             tools=self._get_tools(),
         )
 
-    def _get_default_model(self) -> LiteLlm:
+    def _get_default_model(self) -> LiteLlm | str:
         """Get the default LLM model from settings."""
         try:
-            api_key = self.settings.llm.get_groq_api_key()
-            return LiteLlm(model=self.settings.llm.groq_model)
+            return LLMServices(config=self.settings.llm).get_model()
         except ValueError as e:
+            self.logger.error(f"Failed to initialize default model: {e}")
+            raise
+        except RuntimeError as e:
             self.logger.error(f"Failed to initialize default model: {e}")
             raise
 

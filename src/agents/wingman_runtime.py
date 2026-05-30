@@ -3,6 +3,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+
 from src.agents.jobSearcher import root_agent as job_agent
 from src.agents.calenderManager import root_agent as calendar_agent
 from src.agents.expenseManager import root_agent as expense_agent
@@ -13,11 +14,11 @@ import datetime
 APP_NAME = "wingman_orchestrator"
 
 # Initialize orchestrator model using centralized LLM service
-groq_model = LLMServices().get_groq_model()
+orchestrator_model = LLMServices().get_model()
 
 orchestrator = LlmAgent(
     name=APP_NAME,
-    model=groq_model,
+    model=orchestrator_model,
     instruction=(
         "You are Wingman's orchestrator. "
         "Your job is to analyze each user request, decide which specialist agent should handle it, "

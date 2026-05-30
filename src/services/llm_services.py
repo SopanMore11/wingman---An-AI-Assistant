@@ -1,24 +1,9 @@
 import os
-from dataclasses import dataclass
-from typing import Literal
 
 from dotenv import load_dotenv
 from google.adk.models import LiteLlm
-from litai import LLM
 
-Provider = Literal["groq", "google", "litai"]
-
-DEFAULT_GROQ_MODEL = "groq/qwen/qwen3-32b"
-DEFAULT_GOOGLE_MODEL = "gemini-3-flash-preview"
-DEFAULT_LITAI_MODEL = "lightning-ai/gemma-4-31B-it"
-
-
-@dataclass(frozen=True)
-class LLMConfig:
-    provider: Provider = "groq"
-    groq_model: str = DEFAULT_GROQ_MODEL
-    google_model: str = DEFAULT_GOOGLE_MODEL
-    litai_model: str = DEFAULT_LITAI_MODEL
+from src.config.settings import LLMConfig, Provider
 
 
 class LLMServices:
@@ -26,7 +11,7 @@ class LLMServices:
 
     def __init__(self, config: LLMConfig | None = None):
         load_dotenv()
-        self.config = config or LLMConfig()
+        self.config = config or LLMConfig.from_env()
         self._ensure_env()
 
     @staticmethod
@@ -35,6 +20,7 @@ class LLMServices:
         google_api_key = os.getenv("GOOGLE_API_KEY")
         groq_api_key = os.getenv("GROQ_API_KEY")
         lightning_api_key = os.getenv("LIGHTNING_API_KEY")
+        litellm_api_key = os.getenv("LITELLM_API_KEY")
 
         if google_api_key:
             os.environ["GOOGLE_API_KEY"] = google_api_key
@@ -42,6 +28,8 @@ class LLMServices:
             os.environ["GROQ_API_KEY"] = groq_api_key
         if lightning_api_key:
             os.environ["LIGHTNING_API_KEY"] = lightning_api_key
+        if litellm_api_key:
+            os.environ["LITELLM_API_KEY"] = litellm_api_key
 
     @staticmethod
     def _require_env(var_name: str) -> None:
@@ -56,19 +44,31 @@ class LLMServices:
         self._require_env("GOOGLE_API_KEY")
         return model_name or self.config.google_model
 
-    def get_litai_model(self, model_name: str | None = None) -> LLM:
+    def get_litai_model(self, model_name: str | None = None) -> LiteLlm:
         self._require_env("LIGHTNING_API_KEY")
-        return LLM(
+        return LiteLlm(
             model=model_name or self.config.litai_model,
+            api_base=self.config.litai_api_base,
             api_key=os.environ["LIGHTNING_API_KEY"],
         )
+
+    def get_litellm_model(self, model_name: str | None = None) -> LiteLlm:
+        kwargs: dict[str, str] = {}
+        if self.config.litellm_api_base:
+            kwargs["api_base"] = self.config.litellm_api_base
+
+        api_key = os.getenv("LITELLM_API_KEY")
+        if api_key:
+            kwargs["api_key"] = api_key
+
+        return LiteLlm(model=model_name or self.config.litellm_model, **kwargs)
 
     def get_model(
         self,
         provider: Provider | None = None,
         *,
         model_name: str | None = None,
-    ) -> LiteLlm | str | LLM:
+    ) -> LiteLlm | str:
         selected_provider = provider or self.config.provider
         if selected_provider == "groq":
             return self.get_groq_model(model_name=model_name)
@@ -76,4 +76,6 @@ class LLMServices:
             return self.get_google_model(model_name=model_name)
         if selected_provider == "litai":
             return self.get_litai_model(model_name=model_name)
+        if selected_provider == "litellm":
+            return self.get_litellm_model(model_name=model_name)
         raise ValueError(f"Unsupported provider: {selected_provider}")

@@ -3,7 +3,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast, get_args
 
 from dotenv import load_dotenv
 
@@ -11,7 +11,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Define provider types
-Provider = Literal["groq", "google", "litai"]
+Provider = Literal["groq", "google", "litai", "litellm"]
+
+DEFAULT_GROQ_MODEL = "groq/qwen/qwen3-32b"
+DEFAULT_GOOGLE_MODEL = "gemini-3-flash-preview"
+DEFAULT_LITAI_MODEL = "openai/gpt-4o"
+DEFAULT_LITAI_API_BASE = "https://lightning.ai/api/v1"
+DEFAULT_LITELLM_MODEL = DEFAULT_GROQ_MODEL
 
 # Repository root path
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -48,12 +54,34 @@ class LLMConfig:
     """LLM (Large Language Model) configuration."""
 
     provider: Provider = "groq"
-    groq_model: str = "groq/qwen/qwen3-32b"
-    google_model: str = "gemini-3-flash-preview"
-    litai_model: str = "lightning-ai/gemma-4-31B-it"
+    groq_model: str = DEFAULT_GROQ_MODEL
+    google_model: str = DEFAULT_GOOGLE_MODEL
+    litai_model: str = DEFAULT_LITAI_MODEL
+    litai_api_base: str = DEFAULT_LITAI_API_BASE
+    litellm_model: str = DEFAULT_LITELLM_MODEL
+    litellm_api_base: str | None = None
     groq_api_key_env: str = "GROQ_API_KEY"
     google_api_key_env: str = "GOOGLE_API_KEY"
     lightning_api_key_env: str = "LIGHTNING_API_KEY"
+    litellm_api_key_env: str = "LITELLM_API_KEY"
+
+    @classmethod
+    def from_env(cls) -> "LLMConfig":
+        """Create LLM configuration from environment variables."""
+        provider = os.getenv("LLM_PROVIDER", "groq").strip().lower()
+        if provider not in get_args(Provider):
+            supported = ", ".join(get_args(Provider))
+            raise ValueError(f"Unsupported LLM_PROVIDER '{provider}'. Use one of: {supported}")
+
+        return cls(
+            provider=cast(Provider, provider),
+            groq_model=os.getenv("GROQ_MODEL", DEFAULT_GROQ_MODEL),
+            google_model=os.getenv("GOOGLE_MODEL", DEFAULT_GOOGLE_MODEL),
+            litai_model=os.getenv("LITAI_MODEL", DEFAULT_LITAI_MODEL),
+            litai_api_base=os.getenv("LITAI_API_BASE", DEFAULT_LITAI_API_BASE),
+            litellm_model=os.getenv("LITELLM_MODEL", DEFAULT_LITELLM_MODEL),
+            litellm_api_base=os.getenv("LITELLM_API_BASE") or None,
+        )
 
     def get_groq_api_key(self) -> str:
         """Get Groq API key from environment."""
@@ -75,6 +103,10 @@ class LLMConfig:
         if not key:
             raise ValueError(f"Missing environment variable: {self.lightning_api_key_env}")
         return key
+
+    def get_litellm_api_key(self) -> str | None:
+        """Get optional LiteLLM API key from environment."""
+        return os.getenv(self.litellm_api_key_env)
 
 
 @dataclass(frozen=True)
@@ -132,7 +164,7 @@ class Settings:
 
         return cls(
             database=DatabaseConfig(),
-            llm=LLMConfig(),
+            llm=LLMConfig.from_env(),
             calendar=CalendarConfig(),
             telegram=TelegramConfig(),
             debug=debug,

@@ -1,5 +1,6 @@
 import warnings
 import logging
+from langsmith.integrations.google_adk import configure_google_adk
 
 # Ignore all warnings (per user request)
 warnings.filterwarnings("ignore")
@@ -17,6 +18,7 @@ from src.integrations.telegram import build_telegram_application
 
 
 def main() -> None:
+	configure_google_adk()
 	runtime = WingmanRuntime()
 	app = build_telegram_application(ask_fn=runtime.ask)
 	logger.info("Starting Telegram polling")
