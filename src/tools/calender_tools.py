@@ -1,12 +1,15 @@
 from src.google_authenticator import authenticate_google_calendar
 import datetime
-import os
-from dotenv import load_dotenv
 
-load_dotenv()
-os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
+_calendar_service = None
 
-service = authenticate_google_calendar()
+
+def get_calendar_service():
+    """Return a cached Google Calendar service, authenticating on first use."""
+    global _calendar_service
+    if _calendar_service is None:
+        _calendar_service = authenticate_google_calendar()
+    return _calendar_service
 
 
 def format_datetime_input(dt: str) -> str:
@@ -26,6 +29,7 @@ def get_schedule_for_date(target_date_str: str) -> dict:
     :param target_date_str: A string in 'YYYY-MM-DD' format.
     """
     try:
+        service = get_calendar_service()
         start_of_day = f"{target_date_str}T00:00:00+05:30"
         end_of_day = f"{target_date_str}T23:59:59+05:30"
 
@@ -80,6 +84,7 @@ def create_calendar_event(
     Accepts formats: 'YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DDTHH:MM:SS'
     """
     try:
+        service = get_calendar_service()
         formatted_start = format_datetime_input(start_datetime)
         formatted_end = format_datetime_input(end_datetime)
 
@@ -120,6 +125,7 @@ def delete_calendar_event(event_id: str) -> dict:
     Deletes a calendar event by event_id.
     """
     try:
+        service = get_calendar_service()
         service.events().delete(
             calendarId="primary",
             eventId=event_id,
@@ -142,6 +148,7 @@ def update_calendar_event(
     Updates only provided fields.
     """
     try:
+        service = get_calendar_service()
         if not any([new_summary, new_description, new_start_datetime, new_end_datetime]):
             return {"status": "error", "message": "No update fields provided."}
 
@@ -191,6 +198,7 @@ def get_free_slots_for_date(
     Returns available free slots for a specific date in IST.
     """
     try:
+        service = get_calendar_service()
         start_of_day = f"{target_date_str}T00:00:00+05:30"
         end_of_day = f"{target_date_str}T23:59:59+05:30"
 

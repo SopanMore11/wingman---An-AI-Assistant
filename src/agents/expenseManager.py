@@ -1,4 +1,3 @@
-from datetime import datetime
 from src.agents.base_agent import BaseAgent
 from src.utils import load_md_file
 from src.tools.expense_tools import (
@@ -39,9 +38,5 @@ class ExpenseManagerAgent(BaseAgent):
         ]
 
 
-# Export the agent instance
-root_agent = ExpenseManagerAgent().agent
-
-if __name__ == "__main__":
-    # When run directly, open a small local REPL for manual testing.
-    ExpenseManagerAgent().chat_cli()
+def build_expense_agent():
+    return ExpenseManagerAgent().agent

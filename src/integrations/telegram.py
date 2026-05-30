@@ -4,7 +4,8 @@ from collections.abc import Awaitable, Callable, Iterable
 import logging
 
 from telegram import Update
-from telegram.constants import ChatAction
+from telegram.constants import ChatAction, ParseMode
+from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 MAX_TELEGRAM_MESSAGE_LEN = 4000
@@ -77,7 +78,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info("Orchestrator response received | user_id=%s | chars=%s", user_id, len(response_text))
 
     for part in _chunk_text(response_text):
-        await update.message.reply_text(part)
+        try:
+            await update.message.reply_text(part, parse_mode=ParseMode.HTML)
+        except BadRequest as exc:
+            logger.warning("HTML parse failed; sending plain text fallback: %s", exc)
+            await update.message.reply_text(part)
 
 
 def build_telegram_application(

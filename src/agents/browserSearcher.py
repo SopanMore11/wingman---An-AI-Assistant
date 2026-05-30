@@ -30,7 +30,5 @@ class BrowserSearchAgent(BaseAgent):
         ]
 
 
-root_agent = BrowserSearchAgent().agent
-
-if __name__ == "__main__":
-    BrowserSearchAgent().chat_cli()
+def build_browser_agent():
+    return BrowserSearchAgent().agent

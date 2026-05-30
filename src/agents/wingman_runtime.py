@@ -3,23 +3,14 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-
-from src.agents.jobSearcher import root_agent as job_agent
-from src.agents.calenderManager import root_agent as calendar_agent
-from src.agents.expenseManager import root_agent as expense_agent
-from src.agents.browserSearcher import root_agent as browser_agent
 from src.services.llm_services import LLMServices
 import datetime
 
 APP_NAME = "wingman_orchestrator"
 
-# Initialize orchestrator model using centralized LLM service
-orchestrator_model = LLMServices().get_model()
 
-orchestrator = LlmAgent(
-    name=APP_NAME,
-    model=orchestrator_model,
-    instruction=(
+def _build_orchestrator_instruction() -> str:
+    return (
         "You are Wingman's orchestrator. "
         "Your job is to analyze each user request, decide which specialist agent should handle it, "
         "and delegate to the best matching sub-agent.\n\n"
@@ -33,22 +24,45 @@ orchestrator = LlmAgent(
         "7. If the user says 'latest', 'today', 'tomorrow', or similar, interpret it using the current date.\n"
         "8. Prefer concise final answers and avoid unnecessary explanations.\n\n"
         "9. If the user asks to inspect a browser page, capture HTML, inspect DOM, or work with buttons/forms on a live page, delegate to the browser inspection agent.\n"
-        "10. If you find that the user's request needs to be completed by using multiple agents, you should call the agents and complete it in the same conversation."
+        "10. If you find that the user's request needs to be completed by using multiple agents, you should call the agents and complete it in the same conversation.\n"
+        "11. Final answers are sent to Telegram with HTML parse mode. Use Telegram-safe HTML, not Markdown. "
+        "Never use Markdown headings, **bold**, or [text](url) links. Use <b>text</b> for bold and "
+        "<a href=\"url\">text</a> for links. Escape literal <, >, and & as &lt;, &gt;, and &amp;.\n"
         f"Today's date is {datetime.datetime.now().strftime('%Y-%m-%d')}."
-    ),
-    description=(
-        "Main orchestrator agent for Wingman that delegates user queries to the "
-        "appropriate sub-agent."
-    ),
-    sub_agents=[job_agent, calendar_agent, expense_agent, browser_agent],
-)
+    )
+
+
+def build_orchestrator() -> LlmAgent:
+    from src.agents.browserSearcher import build_browser_agent
+    from src.agents.calenderManager import build_calendar_agent
+    from src.agents.expenseManager import build_expense_agent
+    from src.agents.jobSearcher import build_job_agent
+
+    orchestrator_model = LLMServices().get_model()
+
+    return LlmAgent(
+        name=APP_NAME,
+        model=orchestrator_model,
+        instruction=_build_orchestrator_instruction(),
+        description=(
+            "Main orchestrator agent for Wingman that delegates user queries to the "
+            "appropriate sub-agent."
+        ),
+        sub_agents=[
+            build_job_agent(),
+            build_calendar_agent(),
+            build_expense_agent(),
+            build_browser_agent(),
+        ],
+    )
 
 
 class WingmanRuntime:
     def __init__(self) -> None:
         self.session_service = InMemorySessionService()
+        self.agent = build_orchestrator()
         self.runner = Runner(
-            agent=orchestrator,
+            agent=self.agent,
             app_name=APP_NAME,
             session_service=self.session_service,
         )
@@ -83,6 +97,5 @@ class WingmanRuntime:
                     final_response_text = (
                         f"Request escalated: {event.error_message or 'No specific details.'}"
                     )
-                break
 
         return final_response_text

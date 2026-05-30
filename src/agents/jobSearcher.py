@@ -1,5 +1,3 @@
-import os
-from dotenv import load_dotenv
 from src.agents.base_agent import BaseAgent
 from src.utils import load_md_file
 from src.tools.job_search_tools import (
@@ -13,11 +11,6 @@ from src.tools.job_search_tools import (
     get_job_filter_metadata,
     extract_job_details_from_url,
 )
-
-# Load environment variables
-load_dotenv()
-os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
-os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 
 
 class JobSearchAgent(BaseAgent):
@@ -48,8 +41,5 @@ class JobSearchAgent(BaseAgent):
         ]
 
 
-# Export the agent instance
-root_agent = JobSearchAgent().agent
-
-if __name__ == "__main__":
-    JobSearchAgent().chat_cli()
+def build_job_agent():
+    return JobSearchAgent().agent
