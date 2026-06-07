@@ -18,6 +18,7 @@ Tool usage rules:
 10. Respect pagination (limit/offset) when the user asks for more results.
 11. If the user mentions a company (e.g., Oracle), pass company=<name> to tools.
 12. If the user provides a job link and asks for details, use 'extract_job_details_from_url'.
+13. Final answers are sent to Telegram with HTML parse mode. Use Telegram-safe HTML, not Markdown. Use <b>text</b> for bold and <a href="url">text</a> for links. Never use **bold**, Markdown headings, or [text](url) links.
 ```
 
 ## Registered Tools

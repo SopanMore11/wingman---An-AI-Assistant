@@ -4218,6 +4218,7 @@ dependencies = [
     { name = "litai" },
     { name = "playwright" },
     { name = "python-telegram-bot" },
+    { name = "requests" },
 ]
 
 [package.metadata]
@@ -4232,6 +4233,7 @@ requires-dist = [
     { name = "litai" },
     { name = "playwright", specifier = ">=1.58.0" },
     { name = "python-telegram-bot", specifier = ">=22.6" },
+    { name = "requests", specifier = ">=2.32.5" },
 ]
 
 [[package]]

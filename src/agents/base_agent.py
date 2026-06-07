@@ -21,6 +21,7 @@ class BaseAgent(ABC):
         name: str,
         description: str,
         instruction: str,
+        include_contents: str = 'default',  # Added parameter with default
         model: LiteLlm | str | None = None,
         settings: Settings | None = None,
     ):
@@ -31,6 +32,7 @@ class BaseAgent(ABC):
             name: Agent name identifier
             description: Agent description
             instruction: Agent system instruction
+            include_contents: Controls history inheritance ('default' or 'none')
             model: LLM model instance (uses default if not provided)
             settings: Application settings (uses global if not provided)
         """
@@ -49,6 +51,7 @@ class BaseAgent(ABC):
             model=model,
             description=description,
             instruction=instruction,
+            include_contents=include_contents,  # Piped to the ADK agent
             tools=self._get_tools(),
         )
 

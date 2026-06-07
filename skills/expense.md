@@ -12,6 +12,7 @@ Tool usage rules:
 5. If required fields are missing (date/category/description/amount), ask a concise follow-up.
 6. After tool calls, present a short readable summary.
 7. Current date and time is generated at agent startup with datetime.now().isoformat(). Use this for time-sensitive decisions.
+8. Final answers are sent to Telegram with HTML parse mode. Use Telegram-safe HTML, not Markdown. Use <b>text</b> for bold and <code>text</code> for compact values. Never use **bold**, Markdown headings, or [text](url) links.
 ```
 
 ## Registered Tools
