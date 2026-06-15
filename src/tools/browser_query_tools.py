@@ -4,6 +4,8 @@ from typing import Any
 
 from src.tools.browser_html_tools import get_page_html_content
 
+VALID_WAIT_UNTIL = {"commit", "domcontentloaded", "load", "networkidle"}
+
 
 def _error_response(message: str) -> dict[str, Any]:
     return {"status": "error", "message": message}
@@ -117,6 +119,12 @@ def open_url_and_capture_html(
     """
     Open a URL in an existing browser page over CDP and capture cleaned HTML.
     """
+    if wait_until not in VALID_WAIT_UNTIL:
+        return _error_response(
+            f"Invalid wait_until value '{wait_until}'. "
+            f"Supported: {', '.join(sorted(VALID_WAIT_UNTIL))}."
+        )
+
     try:
         from playwright.sync_api import sync_playwright
 
@@ -129,7 +137,12 @@ def open_url_and_capture_html(
                 else:
                     context = browser.new_context()
 
-                if len(context.pages) > page_index:
+                if page_index < 0:
+                    return _error_response(
+                        f"Invalid page_index {page_index}. Must be >= 0."
+                    )
+
+                if page_index < len(context.pages):
                     page = context.pages[page_index]
                     created_page = False
                 else:
@@ -175,6 +188,12 @@ def open_url_and_capture_html_with_local_browser(
     """
     Launch a temporary local browser, open a URL, capture cleaned HTML, and close the browser.
     """
+    if wait_until not in VALID_WAIT_UNTIL:
+        return _error_response(
+            f"Invalid wait_until value '{wait_until}'. "
+            f"Supported: {', '.join(sorted(VALID_WAIT_UNTIL))}."
+        )
+
     try:
         from playwright.sync_api import sync_playwright
 
