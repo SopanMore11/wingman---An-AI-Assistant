@@ -50,6 +50,7 @@ class LLMServices:
             model=model_name or self.config.litai_model,
             api_base=self.config.litai_api_base,
             api_key=os.environ["LIGHTNING_API_KEY"],
+            custom_llm_provider="openai",
         )
 
     def get_litellm_model(self, model_name: str | None = None) -> LiteLlm:

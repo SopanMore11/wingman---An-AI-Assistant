@@ -13,9 +13,9 @@ load_dotenv()
 # Define provider types
 Provider = Literal["groq", "google", "litai", "litellm"]
 
-DEFAULT_GROQ_MODEL = "groq/qwen/qwen3-32b"
-DEFAULT_GOOGLE_MODEL = "gemini-3-flash-preview"
-DEFAULT_LITAI_MODEL = "openai/gpt-4o"
+DEFAULT_GROQ_MODEL = "groq/qwen2-7b-instruct"
+DEFAULT_GOOGLE_MODEL = "gemini-2.0-flash"
+DEFAULT_LITAI_MODEL = "google/gemini-2.5-flash-lite-preview-06-17"
 DEFAULT_LITAI_API_BASE = "https://lightning.ai/api/v1"
 DEFAULT_LITELLM_MODEL = DEFAULT_GROQ_MODEL
 
