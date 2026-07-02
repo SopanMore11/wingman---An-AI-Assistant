@@ -10,6 +10,8 @@ DEFAULT_STRIP_SELECTORS = [
     "template",
 ]
 
+DEFAULT_MAX_HTML_LENGTH: int = 200_000
+
 
 def get_page_html_content(
     page: Any,
@@ -19,6 +21,7 @@ def get_page_html_content(
     include_visible_text: bool = False,
     strip_selectors: list[str] | None = None,
     mask_passwords: bool = True,
+    max_html_length: int | None = DEFAULT_MAX_HTML_LENGTH,
 ) -> dict[str, Any]:
     """
     Capture a cleaned HTML snapshot from a Playwright page.
@@ -135,48 +138,11 @@ def get_page_html_content(
     )
 
     snapshot["content_length"] = len(snapshot["html"])
+
+    if max_html_length is not None and len(snapshot["html"]) > max_html_length:
+        snapshot["html"] = snapshot["html"][:max_html_length]
+        snapshot["truncated"] = True
+    else:
+        snapshot["truncated"] = False
+
     return snapshot
-
-
-def get_page_html_via_cdp(
-    *,
-    cdp_url: str = "http://127.0.0.1:9222",
-    page_index: int = 0,
-    root_selector: str | None = "body",
-    include_form_values: bool = True,
-    include_visible_text: bool = False,
-    strip_selectors: list[str] | None = None,
-    mask_passwords: bool = True,
-) -> dict[str, Any]:
-    """Connect to an existing Chromium session over CDP and capture HTML."""
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.connect_over_cdp(cdp_url)
-        try:
-            if browser.contexts:
-                context = browser.contexts[0]
-            else:
-                context = browser.new_context()
-
-            if len(context.pages) > page_index:
-                page = context.pages[page_index]
-                created_page = False
-            else:
-                page = context.new_page()
-                created_page = True
-
-            try:
-                return get_page_html_content(
-                    page,
-                    root_selector=root_selector,
-                    include_form_values=include_form_values,
-                    include_visible_text=include_visible_text,
-                    strip_selectors=strip_selectors,
-                    mask_passwords=mask_passwords,
-                )
-            finally:
-                if created_page:
-                    page.close()
-        finally:
-            browser.close()

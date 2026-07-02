@@ -17,3 +17,10 @@ dependencies = [
     "python-telegram-bot>=22.6",
     "requests>=2.32.5",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

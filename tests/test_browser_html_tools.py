@@ -60,3 +60,59 @@ def test_get_page_html_content_respects_overrides():
     assert page.last_arg["includeVisibleText"] is True
     assert page.last_arg["stripSelectors"] == ["script", ".ads"]
     assert page.last_arg["maskPasswords"] is False
+
+
+def test_get_page_html_content_truncates_large_html():
+    long_html = "<body>" + "x" * 500 + "</body>"
+    page = FakePage(
+        {
+            "url": "https://example.com",
+            "title": "Big",
+            "root_selector": "body",
+            "html": long_html,
+            "visible_text": None,
+        }
+    )
+
+    result = get_page_html_content(page, max_html_length=50)
+
+    assert result["content_length"] == len(long_html)
+    assert len(result["html"]) == 50
+    assert result["truncated"] is True
+
+
+def test_get_page_html_content_no_truncation_when_under_limit():
+    short_html = "<body>hi</body>"
+    page = FakePage(
+        {
+            "url": "https://example.com",
+            "title": "Small",
+            "root_selector": "body",
+            "html": short_html,
+            "visible_text": None,
+        }
+    )
+
+    result = get_page_html_content(page, max_html_length=1000)
+
+    assert result["content_length"] == len(short_html)
+    assert result["html"] == short_html
+    assert result["truncated"] is False
+
+
+def test_get_page_html_content_no_limit_when_none():
+    long_html = "x" * 500_000
+    page = FakePage(
+        {
+            "url": "https://example.com",
+            "title": "Huge",
+            "root_selector": "body",
+            "html": long_html,
+            "visible_text": None,
+        }
+    )
+
+    result = get_page_html_content(page, max_html_length=None)
+
+    assert len(result["html"]) == 500_000
+    assert result["truncated"] is False
