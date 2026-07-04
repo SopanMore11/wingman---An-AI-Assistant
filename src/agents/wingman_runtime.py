@@ -1,3 +1,6 @@
+import re
+from collections.abc import Iterable
+
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -7,6 +10,37 @@ from src.services.llm_services import LLMServices
 import datetime
 
 APP_NAME = "wingman_orchestrator"
+
+
+def _clean_response_text(text: str) -> str:
+    """Remove tool-call markup that should never reach Telegram."""
+    return re.sub(r"<tool_call>[\s\S]*?(?:</tool_call>|<tool_call>)", "", text).strip()
+
+
+def _extract_final_response_text(parts: Iterable[types.Part]) -> str:
+    """Prefer non-thought text parts and fall back only if needed."""
+    visible_chunks: list[str] = []
+    fallback_chunks: list[str] = []
+
+    for part in parts:
+        text = getattr(part, "text", None)
+        if not text:
+            continue
+
+        cleaned_text = _clean_response_text(text)
+        if not cleaned_text:
+            continue
+
+        if getattr(part, "thought", False):
+            fallback_chunks.append(cleaned_text)
+        else:
+            visible_chunks.append(cleaned_text)
+
+    if visible_chunks:
+        return "\n".join(visible_chunks).strip()
+    if fallback_chunks:
+        return "\n".join(fallback_chunks).strip()
+    return ""
 
 
 def _build_orchestrator_instruction() -> str:
@@ -93,7 +127,9 @@ class WingmanRuntime:
         ):
             if event.is_final_response():
                 if event.content and event.content.parts:
-                    final_response_text = event.content.parts[0].text
+                    extracted_text = _extract_final_response_text(event.content.parts)
+                    if extracted_text:
+                        final_response_text = extracted_text
                 elif event.actions and event.actions.escalate:
                     final_response_text = (
                         f"Request escalated: {event.error_message or 'No specific details.'}"
