@@ -1,5 +1,6 @@
+import datetime
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
@@ -7,9 +8,9 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from src.services.llm_services import LLMServices
-import datetime
 
 APP_NAME = "wingman_orchestrator"
+_ATTACHMENT_MARKER_RE = re.compile(r"^\[\[SEND_FILE:.+\]\]$")
 
 
 def _clean_response_text(text: str) -> str:
@@ -43,13 +44,31 @@ def _extract_final_response_text(parts: Iterable[types.Part]) -> str:
     return ""
 
 
+def _extract_attachment_markers(parts: Iterable[types.Part]) -> list[str]:
+    """Collect file markers returned by tools before the orchestrator can summarize them."""
+    markers: list[str] = []
+    for part in parts:
+        function_response = getattr(part, "function_response", None)
+        response = getattr(function_response, "response", None)
+        if not isinstance(response, Mapping):
+            continue
+        marker = response.get("attachment_marker")
+        if (
+            isinstance(marker, str)
+            and _ATTACHMENT_MARKER_RE.fullmatch(marker)
+            and marker not in markers
+        ):
+            markers.append(marker)
+    return markers
+
+
 def _build_orchestrator_instruction() -> str:
     return (
         "You are Wingman's orchestrator. "
         "Your job is to analyze each user request, decide which specialist agent should handle it, "
         "and delegate to the best matching sub-agent.\n\n"
         "Reasoning rules:\n"
-        "1. First identify the primary user intent: calendar, expense, job search, internet search, browser inspection, or mixed.\n"
+        "1. First identify the primary user intent: calendar, expense, job search, resume tailoring, internet search, browser inspection, or mixed.\n"
         "2. If the request clearly belongs to one domain, delegate to exactly one sub-agent.\n"
         "3. If the request combines domains, delegate in the minimum sequence needed to complete it.\n"
         "4. If important information is missing, ask one concise clarifying question.\n"
@@ -60,7 +79,10 @@ def _build_orchestrator_instruction() -> str:
         "9. If the user asks to search the internet, Google, news, images, videos, maps, places, reviews, shopping, Scholar, patents, autocomplete, or Lens, delegate to the browser search agent.\n"
         "10. If the user asks to inspect a browser page, capture HTML, inspect DOM, or work with buttons/forms on a live page, delegate to the browser search agent.\n"
         "11. If you find that the user's request needs to be completed by using multiple agents, you should call the agents and complete it in the same conversation.\n"
-        "12. Final answers are sent to Telegram with HTML parse mode. Use Telegram-safe HTML, not Markdown. "
+        "12. If the user asks to tailor, optimize, or customize a resume for a job description, or compile a tailored LaTeX resume to PDF, delegate to the resume tailor agent.\n"
+        "13. The default base resume is dataset/resume.tex, and a job description pasted in chat must be passed directly to the resume tailor agent; do not request a JD file path.\n"
+        "14. Preserve every [[SEND_FILE:path]] marker returned by a sub-agent exactly in the final answer so Telegram can upload the generated file.\n"
+        "15. Final answers are sent to Telegram with HTML parse mode. Use Telegram-safe HTML, not Markdown. "
         "Never use Markdown headings, **bold**, or [text](url) links. Use <b>text</b> for bold and "
         "<a href=\"url\">text</a> for links. Escape literal <, >, and & as &lt;, &gt;, and &amp;.\n"
         f"Today's date is {datetime.datetime.now().strftime('%Y-%m-%d')}."
@@ -72,6 +94,7 @@ def build_orchestrator() -> LlmAgent:
     from src.agents.calenderManager import build_calendar_agent
     from src.agents.expenseManager import build_expense_agent
     from src.agents.jobSearcher import build_job_agent
+    from src.agents.resumeTailor import build_resume_tailor_agent
 
     orchestrator_model = LLMServices().get_model()
 
@@ -88,6 +111,7 @@ def build_orchestrator() -> LlmAgent:
             build_calendar_agent(),
             build_expense_agent(),
             build_browser_agent(),
+            build_resume_tailor_agent(),
         ],
     )
 
@@ -119,12 +143,17 @@ class WingmanRuntime:
         await self._ensure_session(user_id=user_id, session_id=session_id)
         content = types.Content(role="user", parts=[types.Part(text=text)])
         final_response_text = "I couldn't generate a response. Please try again."
+        attachment_markers: list[str] = []
 
         async for event in self.runner.run_async(
             user_id=user_id,
             session_id=session_id,
             new_message=content,
         ):
+            if event.content and event.content.parts:
+                for marker in _extract_attachment_markers(event.content.parts):
+                    if marker not in attachment_markers:
+                        attachment_markers.append(marker)
             if event.is_final_response():
                 if event.content and event.content.parts:
                     extracted_text = _extract_final_response_text(event.content.parts)
@@ -135,4 +164,7 @@ class WingmanRuntime:
                         f"Request escalated: {event.error_message or 'No specific details.'}"
                     )
 
+        for marker in attachment_markers:
+            if marker not in final_response_text:
+                final_response_text = f"{final_response_text}\n{marker}"
         return final_response_text

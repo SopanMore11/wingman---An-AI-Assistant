@@ -1,14 +1,17 @@
-import os
-import uuid
-from collections.abc import Awaitable, Callable, Iterable
 import html
 import logging
+import os
 import re
+import uuid
+from collections.abc import Awaitable, Callable, Iterable
+from pathlib import Path
 
 from telegram import Update
 from telegram.constants import ChatAction, ParseMode
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+
+from src.config.settings import REPO_ROOT
 
 MAX_TELEGRAM_MESSAGE_LEN = 4000
 logger = logging.getLogger("wingman.telegram")
@@ -18,6 +21,7 @@ AskFn = Callable[[str, str, str], Awaitable[str]]
 _PLACEHOLDER_RE = re.compile(r"\ue000(\d+)\ue001")
 _FENCED_CODE_RE = re.compile(r"```(?:[a-zA-Z0-9_+-]+)?\n?(.*?)```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_ATTACHMENT_RE = re.compile(r"\[\[SEND_FILE:(.*?)\]\]")
 _SAFE_HTML_TAG_RE = re.compile(
     r"</?(?:b|strong|i|em|u|s|strike|del|code|pre)>"
     r"|<a\s+href=(?:\"[^\"]*\"|'[^']*')>"
@@ -65,6 +69,33 @@ def _markdown_to_telegram_html(text: str) -> str:
     text = re.sub(r"__([^_\n][\s\S]*?[^_\n])__", r"<b>\1</b>", text)
 
     return _restore_placeholders(text, tokens)
+
+
+def _resolve_attachment_path(raw_path: str) -> Path | None:
+    """Resolve a model-provided PDF path without allowing access outside the project."""
+    candidate = Path(raw_path.strip()).expanduser()
+    if not candidate.is_absolute():
+        candidate = REPO_ROOT / candidate
+    candidate = candidate.resolve()
+
+    try:
+        candidate.relative_to(REPO_ROOT.resolve())
+    except ValueError:
+        return None
+
+    if candidate.suffix.lower() != ".pdf" or not candidate.is_file():
+        return None
+    return candidate
+
+
+def _extract_attachments(text: str) -> tuple[str, list[Path]]:
+    """Remove file markers from response text and return valid local PDFs."""
+    attachments: list[Path] = []
+    for match in _ATTACHMENT_RE.finditer(text):
+        path = _resolve_attachment_path(match.group(1))
+        if path is not None and path not in attachments:
+            attachments.append(path)
+    return _ATTACHMENT_RE.sub("", text).strip(), attachments
 
 
 def _chunk_text(text: str, max_len: int = MAX_TELEGRAM_MESSAGE_LEN) -> Iterable[str]:
@@ -130,14 +161,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     logger.info("Orchestrator response received | user_id=%s | chars=%s", user_id, len(response_text))
 
+    response_text, attachments = _extract_attachments(response_text)
     telegram_html = _markdown_to_telegram_html(response_text)
 
-    for part in _chunk_text(telegram_html):
+    if telegram_html:
+        for part in _chunk_text(telegram_html):
+            try:
+                await update.message.reply_text(part, parse_mode=ParseMode.HTML)
+            except BadRequest as exc:
+                logger.warning("HTML parse failed; sending plain text fallback: %s", exc)
+                await update.message.reply_text(part)
+
+    for attachment in attachments:
         try:
-            await update.message.reply_text(part, parse_mode=ParseMode.HTML)
-        except BadRequest as exc:
-            logger.warning("HTML parse failed; sending plain text fallback: %s", exc)
-            await update.message.reply_text(part)
+            with attachment.open("rb") as document:
+                await update.message.reply_document(
+                    document=document,
+                    filename=attachment.name,
+                )
+        except (OSError, TelegramError) as exc:
+            logger.error("Failed to send attachment %s: %s", attachment, exc)
+            await update.message.reply_text(
+                f"The PDF was created but could not be uploaded: {attachment.name}"
+            )
 
 
 def build_telegram_application(

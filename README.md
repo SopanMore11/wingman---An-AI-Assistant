@@ -2,7 +2,7 @@
 
 Wingman is a Telegram-native multi-agent assistant built with Google ADK. It takes ordinary chat messages, decides which specialist should handle them, uses tools to gather real data, and responds in a format that works cleanly inside Telegram.
 
-This project is designed around one idea: an assistant should feel useful in day-to-day life, not just impressive in a demo. Wingman can manage calendar workflows, track expenses, search local job data, run live web searches, inspect browser pages, and switch LLM backends without changing the app architecture.
+This project is designed around one idea: an assistant should feel useful in day-to-day life, not just impressive in a demo. Wingman can manage calendar workflows, track expenses, search local job data, tailor LaTeX resumes, run live web searches, inspect browser pages, and switch LLM backends without changing the app architecture.
 
 ## What Makes It Interesting
 
@@ -20,6 +20,8 @@ This project is designed around one idea: an assistant should feel useful in day
   Add, edit, delete, search, and summarize expenses stored in a local SQLite database.
 - Job search agent:
   Query locally synced job data using location, keyword, company, recency, and date filters.
+- Resume tailor agent:
+  Make truthful, minimal ATS-focused changes to a LaTeX resume for a target job description and optionally compile it to PDF.
 - Internet and browser agent:
   Search the web with Serper, inspect live browser pages over CDP, or open pages in a temporary Playwright browser and capture structured HTML.
 - Orchestrator:
@@ -45,6 +47,7 @@ Key modules:
 - [src/agents/calenderManager.py](src/agents/calenderManager.py)
 - [src/agents/expenseManager.py](src/agents/expenseManager.py)
 - [src/agents/jobSearcher.py](src/agents/jobSearcher.py)
+- [src/agents/resumeTailor.py](src/agents/resumeTailor.py)
 - [src/agents/browserSearcher.py](src/agents/browserSearcher.py)
 - [src/services/llm_services.py](src/services/llm_services.py)
 - [src/integrations/telegram.py](src/integrations/telegram.py)
@@ -168,12 +171,25 @@ Google Calendar features require OAuth credentials in addition to any model API 
 4. Place `credentials.json` in the repository root.
 5. Run the app once and complete the browser auth flow. `token.json` will be created automatically.
 
+## Resume Tailoring Setup
+
+The default base resume is `dataset/resume.tex`. Paste the complete job description directly in
+your Telegram message; no separate JD file is needed. The source resume is never overwritten,
+and the default outputs are `dataset/resume_tailored.tex` and
+`dataset/resume_tailored.pdf`. The bot uploads the generated PDF into the chat. PDF generation
+requires `pdflatex` (for example, MiKTeX on Windows).
+
+`RESUME_TAILOR_MODEL` controls both the resume specialist and the model that creates the edits;
+it does not inherit the global `LITAI_MODEL`. Use `RESUME_TAILOR_AGENT_MODEL` only if the
+specialist itself should use a different model from the editing call.
+
 ## Example Prompts
 
 - `Show my schedule for tomorrow`
 - `Add an expense of 250 for lunch on 2026-07-02`
 - `Edit my latest coffee expense and change the amount to 180`
 - `Find Oracle jobs in Bengaluru from the last 7 days`
+- `Tailor my resume for this role: <paste the complete job description>`
 - `Search Google News for AI chip updates`
 - `Inspect the current browser page and return the visible form fields`
 
@@ -195,6 +211,7 @@ Notable tool modules:
 - [src/tools/calender_tools.py](src/tools/calender_tools.py)
 - [src/tools/expense_tools.py](src/tools/expense_tools.py)
 - [src/tools/job_search_tools.py](src/tools/job_search_tools.py)
+- [src/tools/resume_tools.py](src/tools/resume_tools.py)
 - [src/tools/browser_query_tools.py](src/tools/browser_query_tools.py)
 - [src/tools/internet_tools.py](src/tools/internet_tools.py)
 
