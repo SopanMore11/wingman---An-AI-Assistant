@@ -7,56 +7,62 @@ from src.agents.resumeTailor import _get_resume_tailor_model
 from src.tools.resume_tools import (
     DEFAULT_RESUME_PATH,
     _resolve_path,
-    apply_resume_patches,
-    tailor_resume,
+    apply_patches,
+    read_resume,
 )
 
 
 def test_resume_agent_model_uses_resume_specific_setting(monkeypatch):
     monkeypatch.setenv("RESUME_TAILOR_MODEL", "anthropic/test-resume-model")
-    monkeypatch.delenv("RESUME_TAILOR_AGENT_MODEL", raising=False)
 
     model = _get_resume_tailor_model()
 
     assert model.model == "anthropic/test-resume-model"
 
 
-def test_tailor_resume_accepts_chat_jd_and_defaults_to_base_resume():
-    parameters = inspect.signature(tailor_resume).parameters
+def test_read_resume_defaults_to_base_resume():
+    parameters = inspect.signature(read_resume).parameters
 
-    assert list(parameters)[:2] == ["job_description", "resume_path"]
+    assert list(parameters)[0] == "resume_path"
     assert parameters["resume_path"].default == DEFAULT_RESUME_PATH
     assert DEFAULT_RESUME_PATH == "dataset/resume.tex"
 
 
-def test_apply_resume_patches_replaces_unique_text():
-    original = "Skills: Python\nExperience: Built an API"
-    patches = """<<<<<<< SEARCH
+def test_apply_patches_replaces_unique_text(tmp_path, monkeypatch):
+    tex_file = tmp_path / "resume.tex"
+    tex_file.write_text("Skills: Python\nExperience: Built an API", encoding="utf-8")
+
+    monkeypatch.setattr("src.tools.resume_tools.REPO_ROOT", tmp_path)
+
+    patch_text = """<<<<<<< SEARCH
 Built an API
 =======
 Built a Python API
 >>>>>>> REPLACE"""
 
-    tailored, applied, failed = apply_resume_patches(original, patches)
+    result = apply_patches(patch_text, resume_path="resume.tex")
 
-    assert tailored == "Skills: Python\nExperience: Built a Python API"
-    assert applied == 1
-    assert failed == []
+    assert result["status"] == "success"
+    assert result["patches_applied"] == 1
+    assert result["failed_patches"] == []
 
 
-def test_apply_resume_patches_rejects_ambiguous_search_text():
-    original = "Python and Python"
-    patches = """<<<<<<< SEARCH
+def test_apply_patches_rejects_ambiguous_search_text(tmp_path, monkeypatch):
+    tex_file = tmp_path / "resume.tex"
+    tex_file.write_text("Python and Python", encoding="utf-8")
+
+    monkeypatch.setattr("src.tools.resume_tools.REPO_ROOT", tmp_path)
+
+    patch_text = """<<<<<<< SEARCH
 Python
 =======
 Python 3
 >>>>>>> REPLACE"""
 
-    tailored, applied, failed = apply_resume_patches(original, patches)
+    result = apply_patches(patch_text, resume_path="resume.tex")
 
-    assert tailored == original
-    assert applied == 0
-    assert failed == ["[AMBIGUOUS, 2 matches] Python"]
+    assert result["status"] == "error"
+    assert "No patches matched" in result["message"]
 
 
 def test_resolve_path_rejects_files_outside_repository():

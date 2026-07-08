@@ -3,19 +3,18 @@ import os
 from src.agents.base_agent import BaseAgent
 from src.services.llm_services import LLMServices
 from src.tools.resume_tools import (
-    DEFAULT_RESUME_TAILOR_MODEL,
+    read_resume,
+    apply_patches,
     compile_resume_to_pdf,
-    tailor_resume,
 )
 from src.utils import load_md_file
 
+# Override with RESUME_TAILOR_MODEL env var to switch models without touching code.
+DEFAULT_RESUME_TAILOR_MODEL = "anthropic/claude-haiku-4-5-20251001"
+
 
 def _get_resume_tailor_model():
-    """Build the resume specialist model independently from the global app model."""
-    model_name = os.getenv(
-        "RESUME_TAILOR_AGENT_MODEL",
-        os.getenv("RESUME_TAILOR_MODEL", DEFAULT_RESUME_TAILOR_MODEL),
-    )
+    model_name = os.getenv("RESUME_TAILOR_MODEL", DEFAULT_RESUME_TAILOR_MODEL)
     return LLMServices().get_litai_model(model_name=model_name)
 
 
@@ -34,7 +33,7 @@ class ResumeTailorAgent(BaseAgent):
         )
 
     def _get_tools(self):
-        return [tailor_resume, compile_resume_to_pdf]
+        return [read_resume, apply_patches, compile_resume_to_pdf]
 
 
 def build_resume_tailor_agent():
